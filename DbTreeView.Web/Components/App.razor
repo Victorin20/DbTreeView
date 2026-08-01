@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="fr">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <base href="/" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="icon" type="image/svg+xml" href="@Assets["favicon.svg"]" />
+    <ImportMap />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes @rendermode="InteractiveServer" />
+    <div id="blazor-error-ui">
+        Une erreur inattendue est survenue.
+        <a href="." class="reload">Recharger</a>
+        <button class="dismiss" type="button">×</button>
+    </div>
+    <script src="@Assets["lib/cytoscape/cytoscape.min.js"]"></script>
+    <script src="@Assets["graph.js"]"></script>
+    <script src="@Assets["_framework/blazor.web.js"]"></script>
+</body>
+
+</html>

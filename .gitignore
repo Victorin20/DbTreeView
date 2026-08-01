@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+App_Data/DataProtectionKeys/
+DbTreeView.Web/App_Data/DataProtectionKeys/
+*.stdout.log
+*.stderr.log
+node_modules/

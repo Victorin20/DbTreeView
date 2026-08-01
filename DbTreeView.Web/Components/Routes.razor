@@ -1,0 +1,15 @@
+<Router AppAssembly="typeof(Program).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="routeData" DefaultLayout="typeof(MainLayout)" />
+        <FocusOnNavigate RouteData="routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="typeof(MainLayout)">
+            <section class="empty-page">
+                <p class="eyebrow">404</p>
+                <h1>Cette page n’existe pas.</h1>
+                <a class="button button-primary" href="/">Retour à la cartographie</a>
+            </section>
+        </LayoutView>
+    </NotFound>
+</Router>

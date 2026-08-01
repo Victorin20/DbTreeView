@@ -1,0 +1,7 @@
+{
+  "name": "db-tree-view-web-assets",
+  "private": true,
+  "dependencies": {
+    "cytoscape": "3.33.1"
+  }
+}

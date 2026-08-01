@@ -1,0 +1,321 @@
+@page "/"
+@using DbTreeView.Web.Models
+@using DbTreeView.Web.Services
+@using Microsoft.Data.SqlClient
+@inject SqlServerMetadataService MetadataService
+@inject DatabaseSession Session
+@inject IJSRuntime JS
+
+<PageTitle>Cartographie SQL Server — DB Tree View</PageTitle>
+
+<div class="workspace @(map is null ? "connection-mode" : "map-mode")">
+    @if (map is null)
+    {
+        <section class="hero">
+            <div class="hero-copy">
+                <p class="eyebrow"><span></span> Explorateur de dépendances SQL Server</p>
+                <h1>Comprends ta base.<br /><em>Vois toutes ses connexions.</em></h1>
+                <p class="hero-intro">
+                    Connecte une base SQL Server pour visualiser les procédures, vues,
+                    fonctions et tables qui dépendent les unes des autres.
+                </p>
+
+                <div class="feature-list" aria-label="Fonctionnalités disponibles">
+                    <div><span class="feature-icon">01</span><p><strong>Lecture seule</strong><small>Aucune donnée métier n’est modifiée</small></p></div>
+                    <div><span class="feature-icon">02</span><p><strong>Graphe interactif</strong><small>Recherche, zoom et chemins entrants/sortants</small></p></div>
+                    <div><span class="feature-icon">03</span><p><strong>Identifiants en mémoire</strong><small>Jamais enregistrés dans un fichier</small></p></div>
+                </div>
+            </div>
+
+            <div class="connection-card">
+                <div class="card-heading">
+                    <span class="status-dot"></span>
+                    <div>
+                        <p class="eyebrow">Nouvelle analyse</p>
+                        <h2>Connexion SQL Server</h2>
+                    </div>
+                </div>
+
+                <EditForm Model="options" FormName="sql-connection" OnValidSubmit="ConnectAndLoadAsync">
+                    <DataAnnotationsValidator />
+
+                    <div class="field-group">
+                        <label for="server">Serveur / instance</label>
+                        <input id="server" @bind="options.Server" @bind:event="oninput" placeholder="SERVEUR\INSTANCE" autocomplete="off" />
+                        <ValidationMessage For="() => options.Server" />
+                    </div>
+
+                    <div class="field-group">
+                        <label for="database">Base de données</label>
+                        <input id="database" @bind="options.Database" @bind:event="oninput" placeholder="MaBase" autocomplete="off" />
+                        <ValidationMessage For="() => options.Database" />
+                    </div>
+
+                    <label class="check-row auth-choice">
+                        <InputCheckbox @bind-Value="options.UseIntegratedSecurity" />
+                        <span>
+                            <strong>Authentification Windows</strong>
+                            <small>Utiliser l’identité qui exécute l’application</small>
+                        </span>
+                    </label>
+
+                    @if (!options.UseIntegratedSecurity)
+                    {
+                        <div class="two-columns">
+                            <div class="field-group">
+                                <label for="username">Utilisateur</label>
+                                <input id="username" @bind="options.Username" @bind:event="oninput" autocomplete="username" />
+                            </div>
+                            <div class="field-group">
+                                <label for="password">Mot de passe</label>
+                                <input id="password" type="password" @bind="options.Password" @bind:event="oninput" autocomplete="current-password" />
+                            </div>
+                        </div>
+                    }
+
+                    <details class="advanced-options">
+                        <summary>Options de chiffrement</summary>
+                        <label class="check-row compact">
+                            <InputCheckbox @bind-Value="options.Encrypt" />
+                            <span>Chiffrer la connexion</span>
+                        </label>
+                        <label class="check-row compact">
+                            <InputCheckbox @bind-Value="options.TrustServerCertificate" />
+                            <span>Faire confiance au certificat serveur</span>
+                        </label>
+                    </details>
+
+                    @if (!string.IsNullOrWhiteSpace(errorMessage))
+                    {
+                        <div class="message message-error" role="alert"><span>!</span>@errorMessage</div>
+                    }
+
+                    <button class="button button-primary button-wide" type="submit" disabled="@isLoading">
+                        @if (isLoading)
+                        {
+                            <span class="spinner" aria-hidden="true"></span><span>Analyse en cours…</span>
+                        }
+                        else
+                        {
+                            <span>Connecter et cartographier</span><span aria-hidden="true">→</span>
+                        }
+                    </button>
+                </EditForm>
+
+                <div class="demo-separator"><span>ou tester l’interface</span></div>
+                <button class="button button-secondary button-wide" type="button" @onclick="LoadDemoAsync" disabled="@isLoading">
+                    Ouvrir la base de démonstration
+                </button>
+            </div>
+        </section>
+    }
+    else
+    {
+        <section class="map-header">
+            <div>
+                <p class="eyebrow"><span class="live-dot"></span> Cartographie active</p>
+                <h1>@map.Database</h1>
+                <p class="database-meta">@map.Server · Analysée à @map.ScannedAt.ToLocalTime().ToString("HH:mm:ss")</p>
+            </div>
+            <div class="map-actions">
+                <button class="button button-secondary" type="button" @onclick="ReloadAsync" disabled="@isLoading || isDemo">↻ Actualiser</button>
+                <button class="button button-ghost" type="button" @onclick="DisconnectAsync">Changer de base</button>
+            </div>
+        </section>
+
+        @if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            <div class="message message-error map-message" role="alert"><span>!</span>@errorMessage</div>
+        }
+
+        <section class="metric-grid" aria-label="Résumé de la base">
+            <article><span class="metric-mark all"></span><p>Objets</p><strong>@map.ObjectCount</strong></article>
+            <article><span class="metric-mark procedure"></span><p>Procédures</p><strong>@map.ProcedureCount</strong></article>
+            <article><span class="metric-mark view"></span><p>Vues</p><strong>@map.ViewCount</strong></article>
+            <article><span class="metric-mark table"></span><p>Tables</p><strong>@map.TableCount</strong></article>
+            <article><span class="metric-mark relation"></span><p>Relations</p><strong>@map.Edges.Count</strong></article>
+        </section>
+
+        <section class="graph-panel">
+            <div class="graph-toolbar">
+                <div class="search-box">
+                    <span aria-hidden="true">⌕</span>
+                    <input @bind="searchTerm" @bind:event="oninput" @bind:after="SearchAsync" placeholder="Rechercher une procédure, vue, table…" aria-label="Rechercher dans la cartographie" />
+                    @if (!string.IsNullOrEmpty(searchTerm))
+                    {
+                        <button type="button" @onclick="ClearSearchAsync" aria-label="Effacer la recherche">×</button>
+                    }
+                </div>
+                <div class="toolbar-buttons">
+                    <select @bind="selectedLayout" @bind:after="ChangeLayoutAsync" aria-label="Disposition du graphe">
+                        <option value="cose">Organique</option>
+                        <option value="breadthfirst">Hiérarchique</option>
+                        <option value="circle">Circulaire</option>
+                    </select>
+                    <button type="button" @onclick="FitGraphAsync" title="Centrer le graphe">⊙ Centrer</button>
+                    <button type="button" @onclick="ToggleForeignKeysAsync" class="@(showForeignKeys ? "active" : null)">Clés étrangères</button>
+                </div>
+            </div>
+
+            <div class="graph-workarea">
+                <div id="database-graph" class="database-graph" aria-label="Graphe des dépendances de la base"></div>
+
+                <aside class="graph-inspector" aria-live="polite">
+                    <p class="eyebrow">Sélection</p>
+                    <h2 id="selection-name">Sélectionne un objet</h2>
+                    <p id="selection-qualified" class="inspector-qualified">Clique sur un nœud pour afficher ses relations.</p>
+                    <div id="selection-kind" class="kind-badge">—</div>
+                    <dl>
+                        <div><dt>Dépendances sortantes</dt><dd id="selection-outgoing">—</dd></div>
+                        <div><dt>Dépendances entrantes</dt><dd id="selection-incoming">—</dd></div>
+                    </dl>
+                    <button id="selection-focus" class="button button-secondary button-wide" type="button" disabled>Isoler le voisinage</button>
+                    <button id="selection-reset" class="text-button" type="button">Réinitialiser le filtre</button>
+                </aside>
+            </div>
+
+            <div class="graph-footer">
+                <div class="legend">
+                    <span><i class="procedure"></i>Procédure</span>
+                    <span><i class="view"></i>Vue</span>
+                    <span><i class="table"></i>Table</span>
+                    <span><i class="function"></i>Fonction</span>
+                    <span><i class="external"></i>Non résolu / externe</span>
+                </div>
+                <span>Molette pour zoomer · Glisser pour déplacer</span>
+            </div>
+        </section>
+
+        @foreach (var warning in map.Warnings)
+        {
+            <div class="message message-warning"><span>i</span>@warning</div>
+        }
+    }
+</div>
+
+@code {
+    private readonly DatabaseConnectionOptions options = new();
+    private DatabaseMap? map;
+    private string? errorMessage;
+    private string searchTerm = string.Empty;
+    private string selectedLayout = "cose";
+    private bool isLoading;
+    private bool isDemo;
+    private bool showForeignKeys;
+    private bool renderGraphPending;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!renderGraphPending || map is null)
+        {
+            return;
+        }
+
+        renderGraphPending = false;
+        try
+        {
+            await JS.InvokeVoidAsync("dbTreeView.render", "database-graph", map, new { showForeignKeys });
+        }
+        catch (JSException exception)
+        {
+            errorMessage = $"Le composant graphique n’a pas pu démarrer : {exception.Message}";
+            StateHasChanged();
+        }
+    }
+
+    private async Task ConnectAndLoadAsync()
+    {
+        isLoading = true;
+        errorMessage = null;
+        isDemo = false;
+
+        try
+        {
+            var result = await MetadataService.TestConnectionAsync(options);
+            if (!result.IsSuccess)
+            {
+                errorMessage = result.Message;
+                return;
+            }
+
+            map = await MetadataService.ReadMapAsync();
+            renderGraphPending = true;
+        }
+        catch (SqlException exception)
+        {
+            errorMessage = exception.Number == 229
+                ? "Connexion réussie, mais le compte n’a pas accès aux métadonnées. Accorde VIEW DEFINITION sur la base."
+                : $"La lecture de la cartographie a échoué : {exception.Message}";
+        }
+        catch (Exception exception)
+        {
+            errorMessage = $"La cartographie a échoué : {exception.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private Task LoadDemoAsync()
+    {
+        errorMessage = null;
+        isDemo = true;
+        map = DemoDatabaseMapFactory.Create();
+        renderGraphPending = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (isDemo)
+        {
+            return;
+        }
+
+        isLoading = true;
+        errorMessage = null;
+        try
+        {
+            map = await MetadataService.ReadMapAsync();
+            renderGraphPending = true;
+        }
+        catch (Exception exception)
+        {
+            errorMessage = $"L’actualisation a échoué : {exception.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task DisconnectAsync()
+    {
+        await JS.InvokeVoidAsync("dbTreeView.destroy");
+        Session.Clear();
+        options.Password = string.Empty;
+        map = null;
+        isDemo = false;
+        errorMessage = null;
+        searchTerm = string.Empty;
+    }
+
+    private Task FitGraphAsync() => JS.InvokeVoidAsync("dbTreeView.fit").AsTask();
+
+    private Task ChangeLayoutAsync() => JS.InvokeVoidAsync("dbTreeView.changeLayout", selectedLayout).AsTask();
+
+    private async Task ToggleForeignKeysAsync()
+    {
+        showForeignKeys = !showForeignKeys;
+        await JS.InvokeVoidAsync("dbTreeView.showForeignKeys", showForeignKeys);
+    }
+
+    private Task SearchAsync() => JS.InvokeVoidAsync("dbTreeView.search", searchTerm).AsTask();
+
+    private async Task ClearSearchAsync()
+    {
+        searchTerm = string.Empty;
+        await JS.InvokeVoidAsync("dbTreeView.search", string.Empty);
+    }
+}
