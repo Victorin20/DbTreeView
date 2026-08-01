@@ -300,6 +300,38 @@ window.dbTreeView = (() => {
         if (graph) graph.fit(undefined, 45);
     }
 
+    async function toggleFullscreen(elementId) {
+        const panel = document.getElementById(elementId);
+        if (!panel) return;
+
+        if (document.fullscreenElement === panel) {
+            await document.exitFullscreen();
+        } else {
+            await panel.requestFullscreen();
+        }
+    }
+
+    function refreshAfterFullscreenChange() {
+        const button = document.getElementById("graph-fullscreen");
+        const panel = document.getElementById("graph-panel");
+        const isFullscreen = document.fullscreenElement === panel;
+
+        if (button) {
+            button.textContent = isFullscreen ? "↙ Quitter le plein écran" : "⛶ Plein écran";
+            button.classList.toggle("active", isFullscreen);
+            button.setAttribute("aria-pressed", String(isFullscreen));
+        }
+
+        if (graph) {
+            window.requestAnimationFrame(() => {
+                graph.resize();
+                graph.fit(undefined, 45);
+            });
+        }
+    }
+
+    document.addEventListener("fullscreenchange", refreshAfterFullscreenChange);
+
     function setText(id, value) {
         const element = document.getElementById(id);
         if (element) element.textContent = value;
@@ -313,5 +345,5 @@ window.dbTreeView = (() => {
         selectedNode = null;
     }
 
-    return { render, search, changeLayout, showForeignKeys, fit, destroy };
+    return { render, search, changeLayout, showForeignKeys, fit, toggleFullscreen, destroy };
 })();

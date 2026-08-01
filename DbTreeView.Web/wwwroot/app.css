@@ -194,6 +194,23 @@ a { color: inherit; text-decoration: none; }
 .metric-mark.relation { color: #9aa6b8; background: #9aa6b8; }
 
 .graph-panel { border: 1px solid #283240; border-radius: var(--radius); overflow: hidden; background: #0d121a; box-shadow: 0 30px 70px rgba(0,0,0,.2); }
+.graph-panel:fullscreen {
+    width: 100vw;
+    height: 100vh;
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    background: #0b1017;
+}
+.graph-panel:fullscreen .graph-toolbar,
+.graph-panel:fullscreen .graph-footer { flex: 0 0 auto; }
+.graph-panel:fullscreen .graph-workarea {
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+}
+.graph-panel:fullscreen .database-graph { height: 100%; }
 .graph-toolbar { min-height: 61px; padding: 10px 13px; border-bottom: 1px solid var(--line); background: #111720; display: flex; justify-content: space-between; align-items: center; gap: 18px; }
 .search-box { position: relative; width: min(430px, 42vw); }
 .search-box > span { position: absolute; left: 13px; top: 9px; color: #738095; font-size: 19px; z-index: 1; }

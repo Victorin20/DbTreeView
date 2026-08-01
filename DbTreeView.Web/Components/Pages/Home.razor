@@ -136,7 +136,7 @@
             <article><span class="metric-mark relation"></span><p>Relations</p><strong>@map.Edges.Count</strong></article>
         </section>
 
-        <section class="graph-panel">
+        <section id="graph-panel" class="graph-panel">
             <div class="graph-toolbar">
                 <div class="search-box">
                     <span aria-hidden="true">⌕</span>
@@ -154,6 +154,7 @@
                     </select>
                     <button type="button" @onclick="FitGraphAsync" title="Centrer le graphe">⊙ Centrer</button>
                     <button type="button" @onclick="ToggleForeignKeysAsync" class="@(showForeignKeys ? "active" : null)">Clés étrangères</button>
+                    <button id="graph-fullscreen" type="button" @onclick="ToggleFullscreenAsync" title="Afficher la cartographie en plein écran">⛶ Plein écran</button>
                 </div>
             </div>
 
@@ -302,6 +303,8 @@
     }
 
     private Task FitGraphAsync() => JS.InvokeVoidAsync("dbTreeView.fit").AsTask();
+
+    private Task ToggleFullscreenAsync() => JS.InvokeVoidAsync("dbTreeView.toggleFullscreen", "graph-panel").AsTask();
 
     private Task ChangeLayoutAsync() => JS.InvokeVoidAsync("dbTreeView.changeLayout", selectedLayout).AsTask();
 
