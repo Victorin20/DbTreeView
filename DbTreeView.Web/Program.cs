@@ -24,6 +24,7 @@ builder.Services
 // server memory only and disappear when the circuit is closed.
 builder.Services.AddScoped<DatabaseSession>();
 builder.Services.AddScoped<SqlServerMetadataService>();
+builder.Services.AddScoped<SqlServerPerformanceService>();
 
 var app = builder.Build();
 

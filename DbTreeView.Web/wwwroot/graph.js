@@ -11,7 +11,7 @@ window.dbTreeView = (() => {
         Schema: "Schéma"
     };
 
-    function render(elementId, map, options) {
+    function render(elementId, map, options, performance) {
         const container = document.getElementById(elementId);
         if (!container) {
             throw new Error("La zone du graphe est introuvable.");
@@ -23,17 +23,26 @@ window.dbTreeView = (() => {
 
         destroy();
 
-        const nodeElements = map.nodes.map(node => ({
-            data: {
-                id: node.id,
-                label: node.name,
-                qualifiedName: node.qualifiedName,
-                schema: node.schema,
-                kind: node.kind,
-                resolved: node.isResolved,
-                parent: node.parentId || undefined
-            }
-        }));
+        const impacts = new Map((performance?.nodeImpacts || []).map(impact => [impact.nodeId, impact]));
+        const nodeElements = map.nodes.map(node => {
+            const impact = impacts.get(node.id);
+            return {
+                data: {
+                    id: node.id,
+                    label: node.name,
+                    qualifiedName: node.qualifiedName,
+                    schema: node.schema,
+                    kind: node.kind,
+                    resolved: node.isResolved,
+                    parent: node.parentId || undefined,
+                    heat: impact?.heat || "None",
+                    impactDerived: impact?.isDerived || false,
+                    impactExecutions: impact?.executionCount || 0,
+                    impactElapsed: impact?.averageElapsedMs || 0,
+                    impactSummary: impact?.summary || "Aucune mesure disponible pour cet objet."
+                }
+            };
+        });
 
         const edgeElements = map.edges.map(edge => ({
             data: {
@@ -100,6 +109,36 @@ window.dbTreeView = (() => {
                         "border-color": "#808998",
                         "border-style": "dashed",
                         "color": "#aab1bc"
+                    }
+                },
+                {
+                    selector: "node[heat = 'Medium']",
+                    style: {
+                        "border-width": 3,
+                        "border-color": "#f0bf5a",
+                        "shadow-blur": 12,
+                        "shadow-color": "#f0bf5a",
+                        "shadow-opacity": 0.18
+                    }
+                },
+                {
+                    selector: "node[heat = 'High']",
+                    style: {
+                        "border-width": 3.5,
+                        "border-color": "#f18a49",
+                        "shadow-blur": 16,
+                        "shadow-color": "#f18a49",
+                        "shadow-opacity": 0.28
+                    }
+                },
+                {
+                    selector: "node[heat = 'Critical']",
+                    style: {
+                        "border-width": 4,
+                        "border-color": "#ff6675",
+                        "shadow-blur": 20,
+                        "shadow-color": "#ff6675",
+                        "shadow-opacity": 0.38
                     }
                 },
                 {
@@ -228,6 +267,10 @@ window.dbTreeView = (() => {
         setText("selection-kind", kindLabels[node.data("kind")] || node.data("kind"));
         setText("selection-incoming", incoming.toString());
         setText("selection-outgoing", outgoing.toString());
+        setText("selection-heat", heatLabel(node.data("heat")));
+        setText("selection-elapsed", formatDuration(node.data("impactElapsed")));
+        setText("selection-executions", formatNumber(node.data("impactExecutions")));
+        setText("selection-impact", node.data("impactSummary"));
 
         const kindBadge = document.getElementById("selection-kind");
         if (kindBadge) kindBadge.dataset.kind = node.data("kind").toLowerCase();
@@ -247,6 +290,10 @@ window.dbTreeView = (() => {
     function resetFocus() {
         if (!graph) return;
         selectedNode = null;
+        setText("selection-heat", "—");
+        setText("selection-elapsed", "—");
+        setText("selection-executions", "—");
+        setText("selection-impact", "Sélectionne un objet pour afficher son impact.");
         graph.elements().removeClass("dimmed highlighted contextual");
         graph.nodes().unselect();
         setText("selection-name", "Sélectionne un objet");
@@ -335,6 +382,28 @@ window.dbTreeView = (() => {
     function setText(id, value) {
         const element = document.getElementById(id);
         if (element) element.textContent = value;
+    }
+
+    function heatLabel(heat) {
+        return {
+            Critical: "Critique",
+            High: "Élevé",
+            Medium: "Moyen",
+            Low: "Faible",
+            None: "Inactif"
+        }[heat] || "—";
+    }
+
+    function formatDuration(milliseconds) {
+        const value = Number(milliseconds || 0);
+        if (!value) return "—";
+        if (value >= 1000) return `${(value / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} s`;
+        return `${value.toLocaleString("fr-FR", { maximumFractionDigits: 1 })} ms`;
+    }
+
+    function formatNumber(value) {
+        const number = Number(value || 0);
+        return number ? number.toLocaleString("fr-FR") : "—";
     }
 
     function destroy() {

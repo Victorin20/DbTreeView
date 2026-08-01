@@ -1,0 +1,299 @@
+@using System.Globalization
+@using DbTreeView.Web.Models
+
+<section class="performance-dashboard" aria-label="Analyse des performances SQL Server">
+    <div class="performance-summary">
+        <article>
+            <p>Exécutions observées</p>
+            <strong>@FormatInteger(Snapshot.TotalProcedureExecutions)</strong>
+            <small>Procédures présentes dans le cache</small>
+        </article>
+        <article>
+            <p>CPU cumulé</p>
+            <strong>@FormatDuration(Snapshot.TotalCpuSeconds * 1_000)</strong>
+            <small>Depuis la création des plans actuels</small>
+        </article>
+        <article>
+            <p>Objets chauds</p>
+            <strong>@Snapshot.HotObjectCount</strong>
+            <small>Niveau élevé ou critique</small>
+        </article>
+        <article>
+            <p>Query Store</p>
+            <strong class="query-store-state @QueryStoreClass">@QueryStoreLabel</strong>
+            <small>Fenêtre analysée : @Snapshot.QueryStoreWindowDays jours</small>
+        </article>
+    </div>
+
+    <div class="method-note">
+        <span>i</span>
+        <p>
+            <strong>Comment lire ces résultats ?</strong>
+            Les procédures et les tables utilisent des compteurs SQL Server directs. Une vue classique n’est pas exécutée
+            séparément : sa chaleur est une estimation calculée à partir des procédures qui la référencent dans la cartographie.
+        </p>
+    </div>
+
+    @foreach (var warning in Snapshot.Warnings)
+    {
+        <div class="message message-warning performance-warning"><span>!</span>@warning</div>
+    }
+
+    <section class="performance-section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Cache d’exécution</p>
+                <h2>Procédures à examiner</h2>
+            </div>
+            <span>@Snapshot.Procedures.Count procédure(s) active(s)</span>
+        </div>
+
+        @if (Snapshot.Procedures.Count == 0)
+        {
+            <div class="performance-empty">Aucune procédure utilisateur n’est actuellement présente dans le cache SQL Server.</div>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="performance-table">
+                    <thead>
+                        <tr>
+                            <th>Objet</th>
+                            <th>Niveau</th>
+                            <th>Exécutions</th>
+                            <th>Durée moy.</th>
+                            <th>CPU moy.</th>
+                            <th>Lectures moy.</th>
+                            <th>Dernier appel</th>
+                            <th>Première piste</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in Snapshot.Procedures
+                            .OrderByDescending(item => item.Heat)
+                            .ThenByDescending(item => item.TotalCpuMs))
+                        {
+                            <tr>
+                                <td><strong>@item.QualifiedName</strong><small>CPU total @FormatDuration(item.TotalCpuMs)</small></td>
+                                <td><span class="heat-badge @HeatClass(item.Heat)">@HeatLabel(item.Heat)</span></td>
+                                <td class="number-cell">@FormatInteger(item.ExecutionCount)</td>
+                                <td class="number-cell">@FormatDuration(item.AverageElapsedMs)</td>
+                                <td class="number-cell">@FormatDuration(item.AverageCpuMs)</td>
+                                <td class="number-cell">@FormatInteger((long)item.AverageLogicalReads)</td>
+                                <td>@FormatDate(item.LastExecutionAt)</td>
+                                <td class="recommendation-cell">@item.Recommendation</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="performance-section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Impact dérivé</p>
+                <h2>Vues à examiner</h2>
+            </div>
+            <span>Estimation issue des dépendances de procédures</span>
+        </div>
+
+        @if (ViewImpacts.Count == 0)
+        {
+            <div class="performance-empty">Cette base ne contient aucune vue utilisateur cartographiée.</div>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="performance-table view-performance-table">
+                    <thead>
+                        <tr>
+                            <th>Vue</th>
+                            <th>Niveau</th>
+                            <th>Procédures sources</th>
+                            <th>Exécutions liées</th>
+                            <th>Durée moy. estimée</th>
+                            <th>CPU moy. estimé</th>
+                            <th>Lectures moy. estimées</th>
+                            <th>Méthode</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in ViewImpacts)
+                        {
+                            <tr>
+                                <td><strong>@item.Node.QualifiedName</strong><small>Mesure non directe</small></td>
+                                <td><span class="heat-badge @HeatClass(item.Impact?.Heat ?? PerformanceHeat.None)">@HeatLabel(item.Impact?.Heat ?? PerformanceHeat.None)</span></td>
+                                <td class="number-cell">@(item.Impact?.ContributorCount.ToString(FrenchCulture) ?? "—")</td>
+                                <td class="number-cell">@(item.Impact is null ? "—" : FormatInteger(item.Impact.ExecutionCount))</td>
+                                <td class="number-cell">@(item.Impact is null ? "—" : FormatDuration(item.Impact.AverageElapsedMs))</td>
+                                <td class="number-cell">@(item.Impact is null ? "—" : FormatDuration(item.Impact.AverageCpuMs))</td>
+                                <td class="number-cell">@(item.Impact is null ? "—" : FormatInteger((long)item.Impact.AverageLogicalReads))</td>
+                                <td class="recommendation-cell">@(item.Impact?.Summary ?? "Aucune procédure mesurée n’atteint actuellement cette vue.")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="performance-section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Index et stockage</p>
+                <h2>Activité des tables</h2>
+            </div>
+            <span>Compteurs cumulés de l’instance</span>
+        </div>
+
+        @if (Snapshot.Tables.Count == 0)
+        {
+            <div class="performance-empty">Les compteurs d’activité des tables ne sont pas disponibles.</div>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="performance-table">
+                    <thead>
+                        <tr>
+                            <th>Table</th>
+                            <th>Niveau</th>
+                            <th>Lignes</th>
+                            <th>Taille</th>
+                            <th>Seeks</th>
+                            <th>Scans</th>
+                            <th>Écritures</th>
+                            <th>Ratio scans</th>
+                            <th>Première piste</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in Snapshot.Tables
+                            .OrderByDescending(item => item.Heat)
+                            .ThenByDescending(item => item.Scans)
+                            .Take(50))
+                        {
+                            <tr>
+                                <td><strong>@item.QualifiedName</strong><small>Dernière lecture @FormatDate(item.LastReadAt)</small></td>
+                                <td><span class="heat-badge @HeatClass(item.Heat)">@HeatLabel(item.Heat)</span></td>
+                                <td class="number-cell">@FormatInteger(item.RowCount)</td>
+                                <td class="number-cell">@FormatSize(item.ReservedSizeMb)</td>
+                                <td class="number-cell">@FormatInteger(item.Seeks)</td>
+                                <td class="number-cell">@FormatInteger(item.Scans)</td>
+                                <td class="number-cell">@FormatInteger(item.Updates)</td>
+                                <td class="number-cell">@item.ScanRatio.ToString("P0", FrenchCulture)</td>
+                                <td class="recommendation-cell">@item.Recommendation</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="performance-section">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Historique Query Store</p>
+                <h2>Requêtes les plus coûteuses</h2>
+            </div>
+            <span>Top 25 par durée cumulée sur @Snapshot.QueryStoreWindowDays jours</span>
+        </div>
+
+        @if (Snapshot.Queries.Count == 0)
+        {
+            <div class="performance-empty">
+                Aucune donnée Query Store n’est disponible. Son état actuel est <strong>@QueryStoreLabel</strong>.
+            </div>
+        }
+        else
+        {
+            <div class="query-list">
+                @foreach (var query in Snapshot.Queries)
+                {
+                    <article class="query-card">
+                        <div class="query-card-heading">
+                            <div><span>#@query.QueryId</span><strong>@query.ObjectName</strong></div>
+                            <small>@FormatInteger(query.ExecutionCount) exécutions · @FormatDuration(query.TotalDurationMs) cumulées</small>
+                        </div>
+                        <code>@query.SqlText</code>
+                        <dl>
+                            <div><dt>Durée moyenne</dt><dd>@FormatDuration(query.AverageDurationMs)</dd></div>
+                            <div><dt>CPU moyen</dt><dd>@FormatDuration(query.AverageCpuMs)</dd></div>
+                            <div><dt>Lectures moyennes</dt><dd>@FormatInteger((long)query.AverageLogicalReads)</dd></div>
+                            <div><dt>Dernière exécution</dt><dd>@FormatDate(query.LastExecutionAt)</dd></div>
+                        </dl>
+                    </article>
+                }
+            </div>
+        }
+    </section>
+</section>
+
+@code {
+    private static readonly CultureInfo FrenchCulture = CultureInfo.GetCultureInfo("fr-FR");
+
+    [Parameter, EditorRequired]
+    public required PerformanceSnapshot Snapshot { get; set; }
+
+    [Parameter, EditorRequired]
+    public required DatabaseMap Map { get; set; }
+
+    private IReadOnlyList<ViewImpactRow> ViewImpacts
+    {
+        get
+        {
+            var impacts = Snapshot.NodeImpacts.ToDictionary(item => item.NodeId, StringComparer.Ordinal);
+            return Map.Nodes
+                .Where(node => node.Kind == DatabaseObjectKind.View)
+                .Select(node => new ViewImpactRow(
+                    node,
+                    impacts.GetValueOrDefault(node.Id)))
+                .OrderByDescending(item => item.Impact?.Heat ?? PerformanceHeat.None)
+                .ThenBy(item => item.Node.QualifiedName, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+    }
+
+    private string QueryStoreLabel => Snapshot.QueryStoreState switch
+    {
+        "READ_WRITE" => "Actif",
+        "READ_ONLY" => "Lecture seule",
+        "OFF" => "Désactivé",
+        _ => Snapshot.QueryStoreState
+    };
+
+    private string QueryStoreClass => Snapshot.QueryStoreState is "READ_WRITE" or "READ_ONLY" ? "state-ok" : "state-off";
+
+    private static string FormatInteger(long value) => value.ToString("N0", FrenchCulture);
+
+    private static string FormatDuration(double milliseconds) => milliseconds switch
+    {
+        >= 60_000 => $"{milliseconds / 60_000:N1} min",
+        >= 1_000 => $"{milliseconds / 1_000:N1} s",
+        _ => $"{milliseconds:N1} ms"
+    };
+
+    private static string FormatSize(double megabytes) => megabytes >= 1_024
+        ? $"{megabytes / 1_024:N1} Go"
+        : $"{megabytes:N1} Mo";
+
+    private static string FormatDate(DateTimeOffset? value) => value is null
+        ? "—"
+        : value.Value.ToLocalTime().ToString("dd/MM HH:mm", FrenchCulture);
+
+    private static string HeatClass(PerformanceHeat heat) => $"heat-{heat.ToString().ToLowerInvariant()}";
+
+    private static string HeatLabel(PerformanceHeat heat) => heat switch
+    {
+        PerformanceHeat.Critical => "Critique",
+        PerformanceHeat.High => "Élevé",
+        PerformanceHeat.Medium => "Moyen",
+        PerformanceHeat.Low => "Faible",
+        _ => "Inactif"
+    };
+
+    private sealed record ViewImpactRow(DatabaseMapNode Node, NodePerformanceImpact? Impact);
+}

@@ -3,6 +3,7 @@
 @using DbTreeView.Web.Services
 @using Microsoft.Data.SqlClient
 @inject SqlServerMetadataService MetadataService
+@inject SqlServerPerformanceService PerformanceService
 @inject DatabaseSession Session
 @inject IJSRuntime JS
 
@@ -118,7 +119,7 @@
                 <p class="database-meta">@map.Server · Analysée à @map.ScannedAt.ToLocalTime().ToString("HH:mm:ss")</p>
             </div>
             <div class="map-actions">
-                <button class="button button-secondary" type="button" @onclick="ReloadAsync" disabled="@isLoading || isDemo">↻ Actualiser</button>
+                <button class="button button-secondary" type="button" @onclick="ReloadAsync" disabled="@(isLoading || isDemo)">↻ Actualiser</button>
                 <button class="button button-ghost" type="button" @onclick="DisconnectAsync">Changer de base</button>
             </div>
         </section>
@@ -136,6 +137,21 @@
             <article><span class="metric-mark relation"></span><p>Relations</p><strong>@map.Edges.Count</strong></article>
         </section>
 
+        <nav class="workspace-tabs" aria-label="Vue de l’analyse">
+            <button type="button" class="@(activeView == "map" ? "active" : null)" @onclick="ShowMapAsync">
+                <span>Cartographie</span><small>Dépendances entre objets</small>
+            </button>
+            <button type="button" class="@(activeView == "performance" ? "active" : null)" @onclick="ShowPerformanceAsync">
+                <span>Performances</span><small>CPU, durée, lectures et activité</small>
+                @if (performance is not null && performance.HotObjectCount > 0)
+                {
+                    <i>@performance.HotObjectCount</i>
+                }
+            </button>
+        </nav>
+
+        @if (activeView == "map")
+        {
         <section id="graph-panel" class="graph-panel">
             <div class="graph-toolbar">
                 <div class="search-box">
@@ -170,6 +186,12 @@
                         <div><dt>Dépendances sortantes</dt><dd id="selection-outgoing">—</dd></div>
                         <div><dt>Dépendances entrantes</dt><dd id="selection-incoming">—</dd></div>
                     </dl>
+                    <dl class="performance-inspector">
+                        <div><dt>Niveau de performance</dt><dd id="selection-heat">—</dd></div>
+                        <div><dt>Durée moyenne</dt><dd id="selection-elapsed">—</dd></div>
+                        <div><dt>Exécutions liées</dt><dd id="selection-executions">—</dd></div>
+                    </dl>
+                    <p id="selection-impact" class="inspector-impact">Sélectionne un objet pour afficher son impact.</p>
                     <button id="selection-focus" class="button button-secondary button-wide" type="button" disabled>Isoler le voisinage</button>
                     <button id="selection-reset" class="text-button" type="button">Réinitialiser le filtre</button>
                 </aside>
@@ -187,6 +209,12 @@
             </div>
         </section>
 
+        }
+        else if (performance is not null)
+        {
+            <PerformanceDashboard Snapshot="performance" Map="map" />
+        }
+
         @foreach (var warning in map.Warnings)
         {
             <div class="message message-warning"><span>i</span>@warning</div>
@@ -197,6 +225,7 @@
 @code {
     private readonly DatabaseConnectionOptions options = new();
     private DatabaseMap? map;
+    private PerformanceSnapshot? performance;
     private string? errorMessage;
     private string searchTerm = string.Empty;
     private string selectedLayout = "cose";
@@ -204,10 +233,11 @@
     private bool isDemo;
     private bool showForeignKeys;
     private bool renderGraphPending;
+    private string activeView = "map";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!renderGraphPending || map is null)
+        if (!renderGraphPending || map is null || activeView != "map")
         {
             return;
         }
@@ -215,7 +245,7 @@
         renderGraphPending = false;
         try
         {
-            await JS.InvokeVoidAsync("dbTreeView.render", "database-graph", map, new { showForeignKeys });
+            await JS.InvokeVoidAsync("dbTreeView.render", "database-graph", map, new { showForeignKeys }, performance);
         }
         catch (JSException exception)
         {
@@ -240,6 +270,8 @@
             }
 
             map = await MetadataService.ReadMapAsync();
+            performance = await LoadPerformanceSafeAsync(map);
+            activeView = "map";
             renderGraphPending = true;
         }
         catch (SqlException exception)
@@ -263,6 +295,8 @@
         errorMessage = null;
         isDemo = true;
         map = DemoDatabaseMapFactory.Create();
+        performance = DemoPerformanceSnapshotFactory.Create();
+        activeView = "map";
         renderGraphPending = true;
         return Task.CompletedTask;
     }
@@ -279,7 +313,8 @@
         try
         {
             map = await MetadataService.ReadMapAsync();
-            renderGraphPending = true;
+            performance = await LoadPerformanceSafeAsync(map);
+            renderGraphPending = activeView == "map";
         }
         catch (Exception exception)
         {
@@ -297,12 +332,46 @@
         Session.Clear();
         options.Password = string.Empty;
         map = null;
+        performance = null;
         isDemo = false;
         errorMessage = null;
         searchTerm = string.Empty;
     }
 
     private Task FitGraphAsync() => JS.InvokeVoidAsync("dbTreeView.fit").AsTask();
+
+    private Task ShowMapAsync()
+    {
+        activeView = "map";
+        renderGraphPending = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task ShowPerformanceAsync()
+    {
+        await JS.InvokeVoidAsync("dbTreeView.destroy");
+        activeView = "performance";
+    }
+
+    private async Task<PerformanceSnapshot> LoadPerformanceSafeAsync(DatabaseMap databaseMap)
+    {
+        try
+        {
+            return await PerformanceService.ReadAsync(databaseMap);
+        }
+        catch (Exception exception)
+        {
+            return new PerformanceSnapshot(
+                DateTimeOffset.UtcNow,
+                "INCONNU",
+                7,
+                [],
+                [],
+                [],
+                [],
+                [$"La cartographie est disponible, mais la collecte des performances a échoué : {exception.Message}"]);
+        }
+    }
 
     private Task ToggleFullscreenAsync() => JS.InvokeVoidAsync("dbTreeView.toggleFullscreen", "graph-panel").AsTask();
 

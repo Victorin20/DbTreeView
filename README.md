@@ -13,6 +13,10 @@ de graphe interactif.
 - Relations de clés étrangères issues de `sys.foreign_keys`.
 - Graphe Cytoscape.js avec zoom, recherche et plusieurs dispositions.
 - Inspection des dépendances entrantes et sortantes d'un objet.
+- Tableau de performances pour les procédures, tables et requêtes Query Store.
+- Mesures CPU, durée, exécutions, lectures logiques, seeks, scans et écritures.
+- Niveau de chaleur reporté sur les nœuds de la cartographie.
+- Impact des vues estimé à partir des procédures qui les utilisent.
 - Références externes ou non résolues affichées en gris.
 - Mode démonstration ne nécessitant pas SQL Server.
 
@@ -70,25 +74,75 @@ permissions du serveur, l'administrateur peut devoir accorder l'accès en lectur
 Ne pas donner `db_owner` à l'application uniquement pour contourner un problème
 de permissions. Un compte dédié possédant les droits minimaux est préférable.
 
+### Permissions pour les statistiques
+
+La cartographie reste disponible sans droits de performance. L'application
+affiche alors un avertissement pour chaque source inaccessible au lieu de faire
+échouer toute l'analyse.
+
+Pour SQL Server 2022 et les versions suivantes, l'administrateur peut accorder :
+
+```sql
+USE [master];
+GRANT VIEW SERVER PERFORMANCE STATE TO [MonLogin];
+
+USE [MaBase];
+GRANT VIEW DATABASE PERFORMANCE STATE TO [MonUtilisateur];
+```
+
+Pour SQL Server 2019 et les versions précédentes, les permissions équivalentes
+sont `VIEW SERVER STATE` et `VIEW DATABASE STATE` :
+
+```sql
+USE [master];
+GRANT VIEW SERVER STATE TO [MonLogin];
+
+USE [MaBase];
+GRANT VIEW DATABASE STATE TO [MonUtilisateur];
+```
+
+Ces droits exposent des informations de diagnostic sur l'instance. Ils doivent
+être accordés à un compte de supervision dédié et validés par l'administrateur
+SQL Server.
+
+## Comment fonctionnent les statistiques
+
+- Les procédures proviennent de `sys.dm_exec_procedure_stats`. Les valeurs sont
+  cumulées pour les plans actuellement présents dans le cache.
+- L'activité des tables provient de `sys.dm_db_index_usage_stats`; le nombre de
+  lignes et la taille réservée proviennent de `sys.dm_db_partition_stats`.
+- Les requêtes les plus coûteuses proviennent de Query Store sur une fenêtre de
+  sept jours, lorsqu'il est actif.
+- Une vue classique n'a pas de temps d'exécution autonome. L'application parcourt
+  les relations `DependsOn` et lui attribue l'impact des procédures qui
+  l'atteignent. Cette mesure est explicitement marquée comme estimation.
+- Les recommandations affichées sont des pistes de diagnostic basées sur des
+  seuils. Elles ne remplacent pas l'analyse du plan d'exécution avant toute
+  modification d'index ou de code SQL.
+
 ## Limites connues du MVP
 
 - Une seule base est analysée à la fois.
 - Les appels construits avec du SQL dynamique ne sont pas toujours détectables.
 - Une référence vers une autre base ou un autre serveur est affichée comme objet
   externe, mais la base distante n'est pas encore analysée.
-- Les statistiques de performance et Query Store feront partie de l'étape
-  suivante.
+- Les compteurs de procédures disparaissent lorsqu'un plan quitte le cache ; les
+  compteurs d'utilisation d'index peuvent repartir de zéro après un redémarrage.
+- Query Store n'est jamais activé ou modifié automatiquement par l'application.
+- Cette version affiche les pistes prioritaires, mais pas encore les plans
+  d'exécution graphiques ni les attentes SQL Server.
 
 ## Organisation
 
 ```text
 DbTreeView.Web/
-├── Components/       interface Blazor
-├── Models/           objets et relations du graphe
-├── Services/         session et lecture du catalogue SQL Server
+├── Components/       interface Blazor et tableau de performances
+├── Models/           objets, relations et mesures
+├── Services/         session, métadonnées et collecteurs SQL Server
 └── wwwroot/          styles, Cytoscape.js et intégration du graphe
 ```
 
-La requête principale se trouve dans
-`Services/SqlServerMetadataService.cs`. Le rendu interactif se trouve dans
-`wwwroot/graph.js`.
+Les requêtes de cartographie se trouvent dans
+`Services/SqlServerMetadataService.cs`; les requêtes de performance et le calcul
+d'impact se trouvent dans `Services/SqlServerPerformanceService.cs`. Le rendu
+interactif se trouve dans `wwwroot/graph.js`.
