@@ -1,15 +1,19 @@
 # DB Tree View
 
-DB Tree View est un MVP Blazor qui se connecte à une base SQL Server et affiche
-les dépendances entre procédures stockées, vues, fonctions et tables sous forme
-de graphe interactif.
+DB Tree View est un MVP Blazor qui se connecte à une instance SQL Server,
+découvre ses bases utilisateur accessibles et affiche leurs dépendances sous
+forme de graphe interactif.
 
 ## Fonctionnalités disponibles
 
 - Authentification Windows ou SQL Server.
 - Test de la connexion avant l'analyse.
-- Lecture en mémoire des objets utilisateur de la base.
+- Analyse de toutes les bases utilisateur en ligne et accessibles, ou d'une base
+  unique au choix.
+- Hiérarchie serveur → base → schéma → objet et filtre par base dans le graphe.
+- Lecture en mémoire des objets utilisateur de chaque base.
 - Dépendances issues de `sys.sql_expression_dependencies`.
+- Résolution des dépendances entre deux bases analysées du même serveur.
 - Relations de clés étrangères issues de `sys.foreign_keys`.
 - Graphe Cytoscape.js avec zoom, recherche et plusieurs dispositions.
 - Inspection des dépendances entrantes et sortantes d'un objet.
@@ -22,7 +26,7 @@ de graphe interactif.
 
 Les identifiants ne sont enregistrés ni dans `appsettings.json`, ni dans un
 fichier. Ils restent dans la session Blazor côté serveur et sont oubliés à la
-fermeture de la session ou avec le bouton **Changer de base**.
+fermeture de la session ou avec le bouton **Changer de serveur**.
 
 ## Prérequis
 
@@ -30,8 +34,8 @@ fermeture de la session ou avec le bouton **Changer de base**.
   le SDK .NET 10.
 - Une instance SQL Server accessible depuis la machine qui exécute
   l'application.
-- Un compte SQL disposant au minimum d'un accès à la base et de la permission
-  de consulter ses métadonnées.
+- Un compte SQL disposant d'un accès aux bases à analyser et de la permission de
+  consulter leurs métadonnées.
 
 ## Lancer le projet
 
@@ -49,6 +53,12 @@ Le formulaire propose `(localdb)\MSSQLLocalDB` par défaut. Remplacer ce nom par
 le serveur réel, par exemple `SQL-PROD-01`, `localhost` ou
 `SERVEUR\INSTANCE`.
 
+L'option **Analyser tout le serveur** est activée par défaut. L'application se
+connecte d'abord à `master`, interroge `sys.databases`, conserve les bases
+utilisateur en ligne pour lesquelles `HAS_DBACCESS` vaut `1`, puis ouvre une
+connexion en lecture seule vers chacune d'elles. Désactiver cette option permet
+de saisir une base unique pour limiter le temps et la taille de l'analyse.
+
 Avec l'authentification Windows, l'identité utilisée est celle du processus qui
 exécute l'application. En développement depuis Visual Studio, il s'agit en
 général de l'utilisateur Windows courant. Après un déploiement IIS, il faudra
@@ -60,7 +70,8 @@ SQL dédié en lecture seule.
 La cartographie ne lit aucune donnée métier et n'exécute aucune procédure. Elle
 interroge uniquement le catalogue système de la base.
 
-La permission suivante permet normalement de rendre les définitions visibles :
+La permission suivante doit être appliquée dans chaque base à cartographier pour
+rendre les définitions visibles :
 
 ```sql
 USE [MaBase];
@@ -107,6 +118,8 @@ SQL Server.
 
 ## Comment fonctionnent les statistiques
 
+- Les collecteurs sont exécutés séparément dans chaque base découverte, puis les
+  résultats sont fusionnés au niveau du serveur.
 - Les procédures proviennent de `sys.dm_exec_procedure_stats`. Les valeurs sont
   cumulées pour les plans actuellement présents dans le cache.
 - L'activité des tables provient de `sys.dm_db_index_usage_stats`; le nombre de
@@ -122,10 +135,15 @@ SQL Server.
 
 ## Limites connues du MVP
 
-- Une seule base est analysée à la fois.
+- Les bases système (`master`, `model`, `msdb` et `tempdb`) sont exclues du mode
+  serveur ; elles restent analysables avec le mode base unique.
 - Les appels construits avec du SQL dynamique ne sont pas toujours détectables.
-- Une référence vers une autre base ou un autre serveur est affichée comme objet
-  externe, mais la base distante n'est pas encore analysée.
+- Une référence inter-base est résolue lorsque la base cible fait partie du
+  périmètre et que le schéma et l'objet sont identifiables. Une référence vers un
+  autre serveur reste affichée comme objet externe.
+- Sur un serveur contenant beaucoup de bases ou d'objets, l'analyse peut prendre
+  du temps ; le filtre de base ou le mode base unique permettent de réduire le
+  graphe affiché.
 - Les compteurs de procédures disparaissent lorsqu'un plan quitte le cache ; les
   compteurs d'utilisation d'index peuvent repartir de zéro après un redémarrage.
 - Query Store n'est jamais activé ou modifié automatiquement par l'application.

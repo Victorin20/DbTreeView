@@ -6,6 +6,16 @@ namespace DbTreeView.Web.Services;
 
 public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<SqlServerMetadataService> logger)
 {
+    private const string DatabasesQuery = """
+        SELECT name
+        FROM sys.databases
+        WHERE database_id > 4
+          AND state = 0
+          AND source_database_id IS NULL
+          AND HAS_DBACCESS(name) = 1
+        ORDER BY name;
+        """;
+
     private const string ObjectsQuery = """
         SELECT
             o.object_id,
@@ -52,24 +62,54 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             return new ConnectionTestResult(false, "Le nom d’utilisateur et le mot de passe sont obligatoires pour l’authentification SQL Server.");
         }
 
+        if (!options.AnalyzeEntireServer && string.IsNullOrWhiteSpace(options.Database))
+        {
+            return new ConnectionTestResult(false, "Le nom de la base est obligatoire en mode base unique.");
+        }
+
         try
         {
             var connectionString = options.BuildConnectionString();
             await using var connection = new SqlConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
+            var serverName = await ReadServerNameAsync(connection, cancellationToken) ?? options.Server.Trim();
 
-            await using var command = connection.CreateCommand();
-            command.CommandText = "SELECT DB_NAME();";
-            command.CommandTimeout = 10;
-            var databaseName = Convert.ToString(await command.ExecuteScalarAsync(cancellationToken)) ?? options.Database;
+            IReadOnlyList<string> databases;
+            string databaseName;
+            if (options.AnalyzeEntireServer)
+            {
+                databases = await ReadAccessibleDatabasesAsync(connection, cancellationToken);
+                databaseName = string.Empty;
+                if (databases.Count == 0)
+                {
+                    session.Clear();
+                    return new ConnectionTestResult(
+                        false,
+                        "Connexion établie, mais aucune base utilisateur en ligne et accessible n’a été trouvée.");
+                }
+            }
+            else
+            {
+                databaseName = connection.Database;
+                databases = [databaseName];
+            }
 
-            session.Connect(connectionString, options.Server.Trim(), databaseName, connection.ServerVersion);
+            session.Connect(
+                connectionString,
+                serverName,
+                databaseName,
+                connection.ServerVersion,
+                options.AnalyzeEntireServer,
+                databases);
 
             return new ConnectionTestResult(
                 true,
-                $"Connexion établie à {databaseName}.",
+                options.AnalyzeEntireServer
+                    ? $"Connexion établie : {databases.Count} base(s) utilisateur accessible(s)."
+                    : $"Connexion établie à {databaseName}.",
                 connection.ServerVersion,
-                databaseName);
+                databaseName,
+                databases.Count);
         }
         catch (SqlException exception)
         {
@@ -87,39 +127,109 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
 
     public async Task<DatabaseMap> ReadMapAsync(CancellationToken cancellationToken = default)
     {
-        if (!session.IsConnected || session.ConnectionString is null)
+        if (!session.IsConnected || session.Databases.Count == 0)
         {
             throw new InvalidOperationException("Aucune connexion SQL Server active.");
         }
 
-        await using var connection = new SqlConnection(session.ConnectionString);
-        await connection.OpenAsync(cancellationToken);
-
-        var nodesByObjectId = await ReadObjectsAsync(connection, cancellationToken);
-        var schemaNodes = nodesByObjectId.Values
-            .Select(node => node.Schema)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(schema => new DatabaseMapNode(
-                SchemaId(schema),
-                schema,
-                schema,
-                schema,
-                DatabaseObjectKind.Schema))
-            .ToList();
-
-        var nodes = schemaNodes
-            .Concat(nodesByObjectId.Values)
-            .ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
-
+        var nodes = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
+        var objectsByKey = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
+        var objectsByQualifiedName = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
+        var dependencies = new List<PendingDependency>();
         var edges = new List<DatabaseMapEdge>();
         var warnings = new List<string>();
+        var scannedDatabases = new List<string>();
+        var emptyDatabaseCount = 0;
 
-        await ReadDependenciesAsync(connection, nodesByObjectId, nodes, edges, cancellationToken);
-        await ReadForeignKeysAsync(connection, nodesByObjectId, edges, cancellationToken);
-
-        if (nodesByObjectId.Count == 0)
+        foreach (var database in session.Databases)
         {
-            warnings.Add("Aucun objet utilisateur n’a été trouvé dans cette base.");
+            try
+            {
+                await using var connection = new SqlConnection(session.GetConnectionString(database));
+                await connection.OpenAsync(cancellationToken);
+                scannedDatabases.Add(database);
+
+                var databaseNode = new DatabaseMapNode(
+                    DatabaseId(database),
+                    database,
+                    database,
+                    string.Empty,
+                    DatabaseObjectKind.Database,
+                    Database: database);
+                nodes[databaseNode.Id] = databaseNode;
+
+                var databaseObjects = await ReadObjectsAsync(
+                    connection,
+                    database,
+                    session.IsServerScope,
+                    cancellationToken);
+
+                if (databaseObjects.Count == 0)
+                {
+                    emptyDatabaseCount++;
+                }
+
+                foreach (var schema in databaseObjects.Values
+                    .Select(node => node.Schema)
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    var schemaNode = new DatabaseMapNode(
+                        SchemaId(database, schema),
+                        schema,
+                        session.IsServerScope ? $"{database}.{schema}" : schema,
+                        schema,
+                        DatabaseObjectKind.Schema,
+                        databaseNode.Id,
+                        Database: database);
+                    nodes.TryAdd(schemaNode.Id, schemaNode);
+                }
+
+                foreach (var pair in databaseObjects)
+                {
+                    nodes[pair.Value.Id] = pair.Value;
+                    objectsByKey[ObjectKey(database, pair.Key)] = pair.Value;
+                    objectsByQualifiedName[QualifiedKey(database, pair.Value.Schema, pair.Value.Name)] = pair.Value;
+                }
+
+                try
+                {
+                    await ReadDependenciesAsync(connection, database, databaseObjects, dependencies, cancellationToken);
+                }
+                catch (SqlException exception)
+                {
+                    logger.LogWarning(exception, "Unable to read dependencies from {Database}", database);
+                    warnings.Add($"{database} : les dépendances n’ont pas pu être lues ({exception.Message}).");
+                }
+
+                try
+                {
+                    await ReadForeignKeysAsync(connection, database, databaseObjects, edges, cancellationToken);
+                }
+                catch (SqlException exception)
+                {
+                    logger.LogWarning(exception, "Unable to read foreign keys from {Database}", database);
+                    warnings.Add($"{database} : les clés étrangères n’ont pas pu être lues ({exception.Message}).");
+                }
+            }
+            catch (SqlException exception)
+            {
+                logger.LogWarning(exception, "Unable to scan database {Database}", database);
+                warnings.Add($"{database} n’a pas pu être analysée : {exception.Message}");
+            }
+        }
+
+        ResolveDependencies(
+            dependencies,
+            objectsByKey,
+            objectsByQualifiedName,
+            nodes,
+            edges,
+            session.IsServerScope,
+            session.Server);
+
+        if (emptyDatabaseCount > 0)
+        {
+            warnings.Add($"{emptyDatabaseCount} base(s) analysée(s) ne contiennent aucun objet utilisateur visible.");
         }
 
         var unresolvedCount = nodes.Values.Count(node => !node.IsResolved);
@@ -132,17 +242,52 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             session.Server,
             session.Database,
             DateTimeOffset.UtcNow,
-            nodes.Values.OrderBy(node => node.Kind).ThenBy(node => node.QualifiedName).ToList(),
-            edges.GroupBy(edge => new { edge.SourceId, edge.TargetId, edge.Kind }).Select(group => group.First()).ToList(),
-            warnings);
+            nodes.Values
+                .OrderBy(node => node.Database, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(node => node.Kind)
+                .ThenBy(node => node.QualifiedName, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            edges
+                .GroupBy(edge => new { edge.SourceId, edge.TargetId, edge.Kind })
+                .Select(group => group.First())
+                .ToList(),
+            warnings,
+            session.IsServerScope,
+            scannedDatabases);
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadAccessibleDatabasesAsync(
+        SqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var databases = new List<string>();
+        await using var command = CreateCommand(connection, DatabasesQuery);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            databases.Add(reader.GetString(0));
+        }
+
+        return databases;
+    }
+
+    private static async Task<string?> ReadServerNameAsync(
+        SqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            "SELECT CONVERT(nvarchar(128), SERVERPROPERTY('ServerName')); ");
+        return Convert.ToString(await command.ExecuteScalarAsync(cancellationToken));
     }
 
     private static async Task<Dictionary<int, DatabaseMapNode>> ReadObjectsAsync(
         SqlConnection connection,
+        string database,
+        bool serverScope,
         CancellationToken cancellationToken)
     {
         var result = new Dictionary<int, DatabaseMapNode>();
-
         await using var command = CreateCommand(connection, ObjectsQuery);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
 
@@ -154,12 +299,14 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             var sqlType = reader.GetString(3).Trim();
 
             result[objectId] = new DatabaseMapNode(
-                ObjectId(objectId),
+                ObjectId(database, objectId),
                 name,
-                $"{schema}.{name}",
+                serverScope ? $"{database}.{schema}.{name}" : $"{schema}.{name}",
                 schema,
                 ToKind(sqlType),
-                SchemaId(schema));
+                SchemaId(database, schema),
+                Database: database,
+                SqlObjectId: objectId);
         }
 
         return result;
@@ -167,14 +314,13 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
 
     private static async Task ReadDependenciesAsync(
         SqlConnection connection,
+        string database,
         IReadOnlyDictionary<int, DatabaseMapNode> objects,
-        IDictionary<string, DatabaseMapNode> nodes,
-        ICollection<DatabaseMapEdge> edges,
+        ICollection<PendingDependency> dependencies,
         CancellationToken cancellationToken)
     {
         await using var command = CreateCommand(connection, DependenciesQuery);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        var edgeNumber = 0;
 
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -184,52 +330,89 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
                 continue;
             }
 
+            dependencies.Add(new PendingDependency(
+                database,
+                source,
+                reader.IsDBNull(1) ? null : reader.GetInt32(1),
+                GetNullableString(reader, 2),
+                GetNullableString(reader, 3),
+                GetNullableString(reader, 4),
+                GetNullableString(reader, 5)));
+        }
+    }
+
+    private static void ResolveDependencies(
+        IEnumerable<PendingDependency> dependencies,
+        IReadOnlyDictionary<string, DatabaseMapNode> objectsByKey,
+        IReadOnlyDictionary<string, DatabaseMapNode> objectsByQualifiedName,
+        IDictionary<string, DatabaseMapNode> nodes,
+        ICollection<DatabaseMapEdge> edges,
+        bool serverScope,
+        string currentServer)
+    {
+        var edgeNumber = 0;
+        foreach (var dependency in dependencies)
+        {
             DatabaseMapNode? target = null;
-            if (!reader.IsDBNull(1) && objects.TryGetValue(reader.GetInt32(1), out var resolvedTarget))
+            var referencesCurrentServer = IsCurrentServer(dependency.ReferencedServer, currentServer);
+            if (dependency.ReferencedId is not null && referencesCurrentServer)
             {
-                target = resolvedTarget;
+                objectsByKey.TryGetValue(ObjectKey(dependency.SourceDatabase, dependency.ReferencedId.Value), out target);
             }
-            else
-            {
-                var serverName = GetNullableString(reader, 2);
-                var databaseName = GetNullableString(reader, 3);
-                var schemaName = GetNullableString(reader, 4) ?? "?";
-                var entityName = GetNullableString(reader, 5);
 
-                if (!string.IsNullOrWhiteSpace(entityName))
+            var targetDatabase = dependency.ReferencedDatabase ?? dependency.SourceDatabase;
+            if (target is null &&
+                referencesCurrentServer &&
+                !string.IsNullOrWhiteSpace(dependency.ReferencedSchema) &&
+                !string.IsNullOrWhiteSpace(dependency.ReferencedEntity))
+            {
+                objectsByQualifiedName.TryGetValue(
+                    QualifiedKey(targetDatabase, dependency.ReferencedSchema, dependency.ReferencedEntity),
+                    out target);
+            }
+
+            if (target is null && !string.IsNullOrWhiteSpace(dependency.ReferencedEntity))
+            {
+                var schema = dependency.ReferencedSchema ?? "?";
+                var parts = new[]
                 {
-                    var parts = new[] { serverName, databaseName, schemaName, entityName }
-                        .Where(part => !string.IsNullOrWhiteSpace(part));
-                    var qualifiedName = string.Join('.', parts);
-                    var externalId = $"external:{qualifiedName}".ToLowerInvariant();
-                    target = new DatabaseMapNode(
-                        externalId,
-                        entityName,
-                        qualifiedName,
-                        schemaName,
-                        DatabaseObjectKind.External,
-                        null,
-                        false);
-                    nodes.TryAdd(externalId, target);
-                }
+                    dependency.ReferencedServer,
+                    serverScope ? targetDatabase : dependency.ReferencedDatabase,
+                    schema,
+                    dependency.ReferencedEntity
+                }.Where(part => !string.IsNullOrWhiteSpace(part));
+                var qualifiedName = string.Join('.', parts);
+                var externalId = ExternalId(dependency.SourceDatabase, qualifiedName);
+                target = new DatabaseMapNode(
+                    externalId,
+                    dependency.ReferencedEntity,
+                    qualifiedName,
+                    schema,
+                    DatabaseObjectKind.External,
+                    IsResolved: false,
+                    Database: targetDatabase);
+                nodes.TryAdd(externalId, target);
             }
 
-            if (target is null || source.Id == target.Id)
+            if (target is null || dependency.Source.Id == target.Id)
             {
                 continue;
             }
 
             edges.Add(new DatabaseMapEdge(
                 $"dependency:{++edgeNumber}",
-                source.Id,
+                dependency.Source.Id,
                 target.Id,
                 DatabaseRelationKind.DependsOn,
-                "utilise"));
+                target.Database.Equals(dependency.SourceDatabase, StringComparison.OrdinalIgnoreCase)
+                    ? "utilise"
+                    : "utilise une autre base"));
         }
     }
 
     private static async Task ReadForeignKeysAsync(
         SqlConnection connection,
+        string database,
         IReadOnlyDictionary<int, DatabaseMapNode> objects,
         ICollection<DatabaseMapEdge> edges,
         CancellationToken cancellationToken)
@@ -247,7 +430,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             }
 
             edges.Add(new DatabaseMapEdge(
-                $"foreign-key:{foreignKeyId}",
+                $"foreign-key:{database}:{foreignKeyId}",
                 source.Id,
                 target.Id,
                 DatabaseRelationKind.ForeignKey,
@@ -270,8 +453,17 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         _ => DatabaseObjectKind.External
     };
 
-    private static string ObjectId(int objectId) => $"object:{objectId}";
-    private static string SchemaId(string schema) => $"schema:{schema}".ToLowerInvariant();
+    private static string DatabaseId(string database) => $"database:{database}".ToLowerInvariant();
+    private static string SchemaId(string database, string schema) => $"schema:{database}:{schema}".ToLowerInvariant();
+    private static string ObjectId(string database, int objectId) => $"object:{database}:{objectId}".ToLowerInvariant();
+    private static string ObjectKey(string database, int objectId) => $"{database}:{objectId}";
+    private static string QualifiedKey(string database, string schema, string entity) => $"{database}:{schema}:{entity}";
+    private static string ExternalId(string sourceDatabase, string qualifiedName) =>
+        $"external:{sourceDatabase}:{qualifiedName}".ToLowerInvariant();
+
+    private static bool IsCurrentServer(string? referencedServer, string currentServer) =>
+        string.IsNullOrWhiteSpace(referencedServer) ||
+        referencedServer.Equals(currentServer, StringComparison.OrdinalIgnoreCase);
 
     private static string ToFriendlyConnectionMessage(SqlException exception) => exception.Number switch
     {
@@ -282,4 +474,13 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         229 => "Le compte ne possède pas les permissions nécessaires pour cette opération.",
         _ => $"SQL Server a refusé la connexion : {exception.Message}"
     };
+
+    private sealed record PendingDependency(
+        string SourceDatabase,
+        DatabaseMapNode Source,
+        int? ReferencedId,
+        string? ReferencedServer,
+        string? ReferencedDatabase,
+        string? ReferencedSchema,
+        string? ReferencedEntity);
 }

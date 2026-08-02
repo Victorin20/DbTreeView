@@ -3,6 +3,7 @@ window.dbTreeView = (() => {
     let selectedNode = null;
 
     const kindLabels = {
+        Database: "Base de données",
         Procedure: "Procédure stockée",
         View: "Vue",
         Table: "Table",
@@ -32,6 +33,7 @@ window.dbTreeView = (() => {
                     label: node.name,
                     qualifiedName: node.qualifiedName,
                     schema: node.schema,
+                    database: node.database,
                     kind: node.kind,
                     resolved: node.isResolved,
                     parent: node.parentId || undefined,
@@ -116,9 +118,9 @@ window.dbTreeView = (() => {
                     style: {
                         "border-width": 3,
                         "border-color": "#f0bf5a",
-                        "shadow-blur": 12,
-                        "shadow-color": "#f0bf5a",
-                        "shadow-opacity": 0.18
+                        "underlay-padding": 5,
+                        "underlay-color": "#f0bf5a",
+                        "underlay-opacity": 0.12
                     }
                 },
                 {
@@ -126,9 +128,9 @@ window.dbTreeView = (() => {
                     style: {
                         "border-width": 3.5,
                         "border-color": "#f18a49",
-                        "shadow-blur": 16,
-                        "shadow-color": "#f18a49",
-                        "shadow-opacity": 0.28
+                        "underlay-padding": 6,
+                        "underlay-color": "#f18a49",
+                        "underlay-opacity": 0.18
                     }
                 },
                 {
@@ -136,9 +138,28 @@ window.dbTreeView = (() => {
                     style: {
                         "border-width": 4,
                         "border-color": "#ff6675",
-                        "shadow-blur": 20,
-                        "shadow-color": "#ff6675",
-                        "shadow-opacity": 0.38
+                        "underlay-padding": 7,
+                        "underlay-color": "#ff6675",
+                        "underlay-opacity": 0.24
+                    }
+                },
+                {
+                    selector: "node[kind = 'Database']",
+                    style: {
+                        "shape": "round-rectangle",
+                        "background-color": "#0d141e",
+                        "background-opacity": 0.72,
+                        "border-width": 1.5,
+                        "border-color": "#46566b",
+                        "padding": 48,
+                        "label": "data(label)",
+                        "font-size": 12,
+                        "font-weight": 700,
+                        "color": "#c8d2df",
+                        "text-valign": "top",
+                        "text-halign": "left",
+                        "text-margin-x": 10,
+                        "text-margin-y": 10
                     }
                 },
                 {
@@ -185,6 +206,7 @@ window.dbTreeView = (() => {
                     }
                 },
                 { selector: ".foreign-key-hidden", style: { "display": "none" } },
+                { selector: ".database-hidden", style: { "display": "none" } },
                 { selector: ".dimmed", style: { "opacity": 0.09 } },
                 {
                     selector: "node.highlighted",
@@ -256,7 +278,7 @@ window.dbTreeView = (() => {
     }
 
     function selectNode(node) {
-        if (!graph || node.data("kind") === "Schema") return;
+        if (!graph || node.data("kind") === "Schema" || node.data("kind") === "Database") return;
 
         selectedNode = node;
         const incoming = node.incomers("edge[kind = 'DependsOn']").length;
@@ -343,6 +365,20 @@ window.dbTreeView = (() => {
         graph.edges("[kind = 'ForeignKey']").toggleClass("foreign-key-hidden", !show);
     }
 
+    function filterDatabase(database) {
+        if (!graph) return;
+        const selectedDatabase = String(database || "").toLocaleLowerCase("fr");
+        graph.elements().removeClass("database-hidden");
+
+        if (selectedDatabase) {
+            graph.nodes().filter(node =>
+                String(node.data("database") || "").toLocaleLowerCase("fr") !== selectedDatabase
+            ).addClass("database-hidden");
+        }
+
+        graph.fit(graph.elements(":visible"), 55);
+    }
+
     function fit() {
         if (graph) graph.fit(undefined, 45);
     }
@@ -414,5 +450,5 @@ window.dbTreeView = (() => {
         selectedNode = null;
     }
 
-    return { render, search, changeLayout, showForeignKeys, fit, toggleFullscreen, destroy };
+    return { render, search, changeLayout, filterDatabase, showForeignKeys, fit, toggleFullscreen, destroy };
 })();

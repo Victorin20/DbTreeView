@@ -199,7 +199,7 @@
                 <p class="eyebrow">Historique Query Store</p>
                 <h2>Requêtes les plus coûteuses</h2>
             </div>
-            <span>Top 25 par durée cumulée sur @Snapshot.QueryStoreWindowDays jours</span>
+            <span>Top 25 du périmètre par durée cumulée sur @Snapshot.QueryStoreWindowDays jours</span>
         </div>
 
         @if (Snapshot.Queries.Count == 0)
@@ -261,11 +261,17 @@
     {
         "READ_WRITE" => "Actif",
         "READ_ONLY" => "Lecture seule",
+        "MIXTE" => "Mixte selon les bases",
         "OFF" => "Désactivé",
         _ => Snapshot.QueryStoreState
     };
 
-    private string QueryStoreClass => Snapshot.QueryStoreState is "READ_WRITE" or "READ_ONLY" ? "state-ok" : "state-off";
+    private string QueryStoreClass => Snapshot.QueryStoreState switch
+    {
+        "READ_WRITE" or "READ_ONLY" => "state-ok",
+        "MIXTE" => "state-mixed",
+        _ => "state-off"
+    };
 
     private static string FormatInteger(long value) => value.ToString("N0", FrenchCulture);
 

@@ -25,9 +25,12 @@ public sealed record ProcedurePerformance(
     DateTimeOffset? CachedAt,
     DateTimeOffset? LastExecutionAt,
     PerformanceHeat Heat,
-    string Recommendation)
+    string Recommendation,
+    string Database = "")
 {
-    public string QualifiedName => $"{Schema}.{Name}";
+    public string QualifiedName => string.IsNullOrWhiteSpace(Database)
+        ? $"{Schema}.{Name}"
+        : $"{Database}.{Schema}.{Name}";
     public double AverageElapsedMs => ExecutionCount == 0 ? 0 : TotalElapsedMs / ExecutionCount;
     public double AverageCpuMs => ExecutionCount == 0 ? 0 : TotalCpuMs / ExecutionCount;
     public double AverageLogicalReads => ExecutionCount == 0 ? 0 : (double)TotalLogicalReads / ExecutionCount;
@@ -47,9 +50,12 @@ public sealed record TablePerformance(
     DateTimeOffset? LastReadAt,
     DateTimeOffset? LastWriteAt,
     PerformanceHeat Heat,
-    string Recommendation)
+    string Recommendation,
+    string Database = "")
 {
-    public string QualifiedName => $"{Schema}.{Name}";
+    public string QualifiedName => string.IsNullOrWhiteSpace(Database)
+        ? $"{Schema}.{Name}"
+        : $"{Database}.{Schema}.{Name}";
     public long Reads => Seeks + Scans + Lookups;
     public double ScanRatio => Reads == 0 ? 0 : (double)Scans / Reads;
 }
@@ -64,7 +70,8 @@ public sealed record QueryPerformance(
     double AverageDurationMs,
     double AverageCpuMs,
     double AverageLogicalReads,
-    DateTimeOffset? LastExecutionAt);
+    DateTimeOffset? LastExecutionAt,
+    string Database = "");
 
 public sealed record NodePerformanceImpact(
     string NodeId,

@@ -15,10 +15,10 @@
         <section class="hero">
             <div class="hero-copy">
                 <p class="eyebrow"><span></span> Explorateur de dépendances SQL Server</p>
-                <h1>Comprends ta base.<br /><em>Vois toutes ses connexions.</em></h1>
+                <h1>Comprends ton serveur.<br /><em>Vois toutes ses connexions.</em></h1>
                 <p class="hero-intro">
-                    Connecte une base SQL Server pour visualiser les procédures, vues,
-                    fonctions et tables qui dépendent les unes des autres.
+                    Connecte une instance SQL Server pour cartographier ses bases accessibles,
+                    leurs procédures, vues, fonctions et tables.
                 </p>
 
                 <div class="feature-list" aria-label="Fonctionnalités disponibles">
@@ -46,11 +46,22 @@
                         <ValidationMessage For="() => options.Server" />
                     </div>
 
-                    <div class="field-group">
-                        <label for="database">Base de données</label>
-                        <input id="database" @bind="options.Database" @bind:event="oninput" placeholder="MaBase" autocomplete="off" />
-                        <ValidationMessage For="() => options.Database" />
-                    </div>
+                    <label class="check-row auth-choice scope-choice">
+                        <InputCheckbox @bind-Value="options.AnalyzeEntireServer" />
+                        <span>
+                            <strong>Analyser tout le serveur</strong>
+                            <small>Toutes les bases utilisateur en ligne auxquelles ce compte a accès</small>
+                        </span>
+                    </label>
+
+                    @if (!options.AnalyzeEntireServer)
+                    {
+                        <div class="field-group">
+                            <label for="database">Base de données</label>
+                            <input id="database" @bind="options.Database" @bind:event="oninput" placeholder="MaBase" autocomplete="off" />
+                            <ValidationMessage For="() => options.Database" />
+                        </div>
+                    }
 
                     <label class="check-row auth-choice">
                         <InputCheckbox @bind-Value="options.UseIntegratedSecurity" />
@@ -98,14 +109,14 @@
                         }
                         else
                         {
-                            <span>Connecter et cartographier</span><span aria-hidden="true">→</span>
+                            <span>Connecter et analyser</span><span aria-hidden="true">→</span>
                         }
                     </button>
                 </EditForm>
 
                 <div class="demo-separator"><span>ou tester l’interface</span></div>
                 <button class="button button-secondary button-wide" type="button" @onclick="LoadDemoAsync" disabled="@isLoading">
-                    Ouvrir la base de démonstration
+                    Ouvrir le serveur de démonstration
                 </button>
             </div>
         </section>
@@ -114,13 +125,16 @@
     {
         <section class="map-header">
             <div>
-                <p class="eyebrow"><span class="live-dot"></span> Cartographie active</p>
-                <h1>@map.Database</h1>
-                <p class="database-meta">@map.Server · Analysée à @map.ScannedAt.ToLocalTime().ToString("HH:mm:ss")</p>
+                <p class="eyebrow"><span class="live-dot"></span> @(map.IsServerScope ? "Analyse serveur active" : "Analyse base active")</p>
+                <h1>@map.ScopeName</h1>
+                <p class="database-meta">
+                    @(map.IsServerScope ? $"{map.DatabaseCount} base(s) analysée(s)" : map.Server)
+                    · Analysée à @map.ScannedAt.ToLocalTime().ToString("HH:mm:ss")
+                </p>
             </div>
             <div class="map-actions">
                 <button class="button button-secondary" type="button" @onclick="ReloadAsync" disabled="@(isLoading || isDemo)">↻ Actualiser</button>
-                <button class="button button-ghost" type="button" @onclick="DisconnectAsync">Changer de base</button>
+                <button class="button button-ghost" type="button" @onclick="DisconnectAsync">Changer de serveur</button>
             </div>
         </section>
 
@@ -129,7 +143,8 @@
             <div class="message message-error map-message" role="alert"><span>!</span>@errorMessage</div>
         }
 
-        <section class="metric-grid" aria-label="Résumé de la base">
+        <section class="metric-grid" aria-label="Résumé du périmètre analysé">
+            <article><span class="metric-mark database"></span><p>Bases</p><strong>@map.DatabaseCount</strong></article>
             <article><span class="metric-mark all"></span><p>Objets</p><strong>@map.ObjectCount</strong></article>
             <article><span class="metric-mark procedure"></span><p>Procédures</p><strong>@map.ProcedureCount</strong></article>
             <article><span class="metric-mark view"></span><p>Vues</p><strong>@map.ViewCount</strong></article>
@@ -163,6 +178,16 @@
                     }
                 </div>
                 <div class="toolbar-buttons">
+                    @if (map.DatabaseCount > 1 && map.ScannedDatabases is not null)
+                    {
+                        <select @bind="selectedDatabase" @bind:after="ChangeDatabaseFilterAsync" aria-label="Filtrer par base de données">
+                            <option value="">Toutes les bases</option>
+                            @foreach (var database in map.ScannedDatabases)
+                            {
+                                <option value="@database">@database</option>
+                            }
+                        </select>
+                    }
                     <select @bind="selectedLayout" @bind:after="ChangeLayoutAsync" aria-label="Disposition du graphe">
                         <option value="cose">Organique</option>
                         <option value="breadthfirst">Hiérarchique</option>
@@ -175,7 +200,7 @@
             </div>
 
             <div class="graph-workarea">
-                <div id="database-graph" class="database-graph" aria-label="Graphe des dépendances de la base"></div>
+                <div id="database-graph" class="database-graph" aria-label="Graphe des dépendances du serveur SQL"></div>
 
                 <aside class="graph-inspector" aria-live="polite">
                     <p class="eyebrow">Sélection</p>
@@ -199,6 +224,7 @@
 
             <div class="graph-footer">
                 <div class="legend">
+                    <span><i class="database"></i>Base</span>
                     <span><i class="procedure"></i>Procédure</span>
                     <span><i class="view"></i>Vue</span>
                     <span><i class="table"></i>Table</span>
@@ -229,6 +255,7 @@
     private string? errorMessage;
     private string searchTerm = string.Empty;
     private string selectedLayout = "cose";
+    private string selectedDatabase = string.Empty;
     private bool isLoading;
     private bool isDemo;
     private bool showForeignKeys;
@@ -271,13 +298,14 @@
 
             map = await MetadataService.ReadMapAsync();
             performance = await LoadPerformanceSafeAsync(map);
+            selectedDatabase = string.Empty;
             activeView = "map";
             renderGraphPending = true;
         }
         catch (SqlException exception)
         {
             errorMessage = exception.Number == 229
-                ? "Connexion réussie, mais le compte n’a pas accès aux métadonnées. Accorde VIEW DEFINITION sur la base."
+                ? "Connexion réussie, mais le compte n’a pas accès aux métadonnées d’une ou plusieurs bases. Accorde VIEW DEFINITION sur les bases concernées."
                 : $"La lecture de la cartographie a échoué : {exception.Message}";
         }
         catch (Exception exception)
@@ -296,6 +324,7 @@
         isDemo = true;
         map = DemoDatabaseMapFactory.Create();
         performance = DemoPerformanceSnapshotFactory.Create();
+        selectedDatabase = string.Empty;
         activeView = "map";
         renderGraphPending = true;
         return Task.CompletedTask;
@@ -314,6 +343,7 @@
         {
             map = await MetadataService.ReadMapAsync();
             performance = await LoadPerformanceSafeAsync(map);
+            selectedDatabase = string.Empty;
             renderGraphPending = activeView == "map";
         }
         catch (Exception exception)
@@ -336,6 +366,7 @@
         isDemo = false;
         errorMessage = null;
         searchTerm = string.Empty;
+        selectedDatabase = string.Empty;
     }
 
     private Task FitGraphAsync() => JS.InvokeVoidAsync("dbTreeView.fit").AsTask();
@@ -376,6 +407,9 @@
     private Task ToggleFullscreenAsync() => JS.InvokeVoidAsync("dbTreeView.toggleFullscreen", "graph-panel").AsTask();
 
     private Task ChangeLayoutAsync() => JS.InvokeVoidAsync("dbTreeView.changeLayout", selectedLayout).AsTask();
+
+    private Task ChangeDatabaseFilterAsync() =>
+        JS.InvokeVoidAsync("dbTreeView.filterDatabase", selectedDatabase).AsTask();
 
     private async Task ToggleForeignKeysAsync()
     {

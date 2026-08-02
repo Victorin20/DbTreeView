@@ -128,41 +128,66 @@ public sealed partial class SqlServerPerformanceService(
         var procedures = new List<ProcedurePerformance>();
         var tables = new List<TablePerformance>();
         var queries = new List<QueryPerformance>();
-        var queryStoreState = "INCONNU";
+        var queryStoreStates = new List<string>();
+        var nodeIds = map.Nodes
+            .Where(node => node.SqlObjectId is not null && !string.IsNullOrWhiteSpace(node.Database))
+            .ToDictionary(
+                node => NodeKey(node.Database, node.SqlObjectId!.Value),
+                node => node.Id,
+                StringComparer.OrdinalIgnoreCase);
 
-        await using var connection = new SqlConnection(session.ConnectionString);
-        await connection.OpenAsync(cancellationToken);
-
-        await TryCollectAsync(
-            "statistiques des procédures",
-            warnings,
-            () => ReadProceduresAsync(connection, procedures, cancellationToken));
-
-        await TryCollectAsync(
-            "activité des tables",
-            warnings,
-            () => ReadTablesAsync(connection, tables, cancellationToken));
-
-        await TryCollectAsync(
-            "état de Query Store",
-            warnings,
-            async () => queryStoreState = await ReadQueryStoreStateAsync(connection, cancellationToken));
-
-        if (queryStoreState is "READ_WRITE" or "READ_ONLY")
+        foreach (var database in session.Databases)
         {
-            await TryCollectAsync(
-                "historique Query Store",
-                warnings,
-                () => ReadQueryStoreAsync(connection, queries, cancellationToken));
+            try
+            {
+                await using var connection = new SqlConnection(session.GetConnectionString(database));
+                await connection.OpenAsync(cancellationToken);
+
+                await TryCollectAsync(
+                    $"statistiques des procédures de {database}",
+                    warnings,
+                    () => ReadProceduresAsync(connection, database, nodeIds, procedures, cancellationToken));
+
+                await TryCollectAsync(
+                    $"activité des tables de {database}",
+                    warnings,
+                    () => ReadTablesAsync(connection, database, nodeIds, tables, cancellationToken));
+
+                var databaseQueryStoreState = "INCONNU";
+                await TryCollectAsync(
+                    $"état de Query Store de {database}",
+                    warnings,
+                    async () => databaseQueryStoreState = await ReadQueryStoreStateAsync(connection, cancellationToken));
+                queryStoreStates.Add(databaseQueryStoreState);
+
+                if (databaseQueryStoreState is "READ_WRITE" or "READ_ONLY")
+                {
+                    await TryCollectAsync(
+                        $"historique Query Store de {database}",
+                        warnings,
+                        () => ReadQueryStoreAsync(connection, database, queries, cancellationToken));
+                }
+                else if (databaseQueryStoreState == "OFF")
+                {
+                    warnings.Add($"{database} : Query Store est désactivé.");
+                }
+                else
+                {
+                    warnings.Add($"{database} : l’état de Query Store n’a pas pu être déterminé.");
+                }
+            }
+            catch (SqlException exception)
+            {
+                logger.LogWarning(exception, "Unable to collect performance data from {Database}", database);
+                warnings.Add($"{database} : la collecte des performances a échoué ({exception.Message}).");
+            }
         }
-        else if (queryStoreState == "OFF")
-        {
-            warnings.Add("Query Store est désactivé : les requêtes lentes historiques ne sont pas disponibles.");
-        }
-        else if (queryStoreState == "INCONNU")
-        {
-            warnings.Add("L’état de Query Store n’a pas pu être déterminé pour cette base.");
-        }
+
+        var queryStoreState = SummarizeQueryStoreStates(queryStoreStates);
+        var topQueries = queries
+            .OrderByDescending(query => query.TotalDurationMs)
+            .Take(25)
+            .ToArray();
 
         var impacts = BuildNodeImpacts(map, procedures, tables);
 
@@ -172,7 +197,7 @@ public sealed partial class SqlServerPerformanceService(
             QueryStoreWindowDays,
             procedures,
             tables,
-            queries,
+            topQueries,
             impacts,
             warnings);
     }
@@ -194,6 +219,8 @@ public sealed partial class SqlServerPerformanceService(
 
     private static async Task ReadProceduresAsync(
         SqlConnection connection,
+        string database,
+        IReadOnlyDictionary<string, string> nodeIds,
         List<ProcedurePerformance> output,
         CancellationToken cancellationToken)
     {
@@ -213,7 +240,7 @@ public sealed partial class SqlServerPerformanceService(
 
             output.Add(new ProcedurePerformance(
                 reader.GetInt32(0),
-                $"object:{reader.GetInt32(0)}",
+                ResolveNodeId(database, reader.GetInt32(0), nodeIds),
                 reader.GetString(1),
                 reader.GetString(2),
                 executions,
@@ -224,12 +251,15 @@ public sealed partial class SqlServerPerformanceService(
                 ReadDateTimeOffset(reader, 3),
                 ReadDateTimeOffset(reader, 4),
                 heat,
-                RecommendProcedure(averageElapsed, averageCpu, averageReads, executions)));
+                RecommendProcedure(averageElapsed, averageCpu, averageReads, executions),
+                database));
         }
     }
 
     private static async Task ReadTablesAsync(
         SqlConnection connection,
+        string database,
+        IReadOnlyDictionary<string, string> nodeIds,
         List<TablePerformance> output,
         CancellationToken cancellationToken)
     {
@@ -248,7 +278,7 @@ public sealed partial class SqlServerPerformanceService(
 
             output.Add(new TablePerformance(
                 reader.GetInt32(0),
-                $"object:{reader.GetInt32(0)}",
+                ResolveNodeId(database, reader.GetInt32(0), nodeIds),
                 reader.GetString(1),
                 reader.GetString(2),
                 reader.GetInt64(3),
@@ -260,7 +290,8 @@ public sealed partial class SqlServerPerformanceService(
                 ReadDateTimeOffset(reader, 9),
                 ReadDateTimeOffset(reader, 10),
                 heat,
-                RecommendTable(reads, scans, updates, scanRatio)));
+                RecommendTable(reads, scans, updates, scanRatio),
+                database));
         }
     }
 
@@ -276,6 +307,7 @@ public sealed partial class SqlServerPerformanceService(
 
     private static async Task ReadQueryStoreAsync(
         SqlConnection connection,
+        string database,
         List<QueryPerformance> output,
         CancellationToken cancellationToken)
     {
@@ -287,14 +319,15 @@ public sealed partial class SqlServerPerformanceService(
             output.Add(new QueryPerformance(
                 reader.GetInt64(0),
                 reader.GetInt32(1),
-                reader.GetString(2),
+                $"{database}.{reader.GetString(2)}",
                 NormalizeSql(reader.GetString(3)),
                 reader.GetInt64(4),
                 Convert.ToDouble(reader.GetValue(5), CultureInfo.InvariantCulture),
                 Convert.ToDouble(reader.GetValue(6), CultureInfo.InvariantCulture),
                 Convert.ToDouble(reader.GetValue(7), CultureInfo.InvariantCulture),
                 Convert.ToDouble(reader.GetValue(8), CultureInfo.InvariantCulture),
-                ReadDateTimeOffset(reader, 9)));
+                ReadDateTimeOffset(reader, 9),
+                database));
         }
     }
 
@@ -362,7 +395,7 @@ public sealed partial class SqlServerPerformanceService(
             aggregates[nodeId] = aggregate;
         }
 
-        if (!aggregate.ContributorIds.Add(procedure.ObjectId))
+        if (!aggregate.ContributorIds.Add(procedure.NodeId))
         {
             return;
         }
@@ -507,12 +540,31 @@ public sealed partial class SqlServerPerformanceService(
 
     private static PerformanceHeat Max(PerformanceHeat left, PerformanceHeat right) => left >= right ? left : right;
 
+    private static string NodeKey(string database, int objectId) => $"{database}:{objectId}";
+
+    private static string ResolveNodeId(
+        string database,
+        int objectId,
+        IReadOnlyDictionary<string, string> nodeIds) =>
+        nodeIds.GetValueOrDefault(NodeKey(database, objectId), $"object:{database}:{objectId}".ToLowerInvariant());
+
+    private static string SummarizeQueryStoreStates(IReadOnlyCollection<string> states)
+    {
+        if (states.Count == 0)
+        {
+            return "INCONNU";
+        }
+
+        var distinct = states.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        return distinct.Length == 1 ? distinct[0] : "MIXTE";
+    }
+
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
 
     private sealed class ImpactAggregate
     {
-        public HashSet<int> ContributorIds { get; } = [];
+        public HashSet<string> ContributorIds { get; } = [];
         public PerformanceHeat Heat { get; set; }
         public bool IsDerived { get; set; }
         public long ExecutionCount { get; set; }

@@ -3,13 +3,14 @@ using Microsoft.Data.SqlClient;
 
 namespace DbTreeView.Web.Models;
 
-public sealed class DatabaseConnectionOptions
+public sealed class DatabaseConnectionOptions : IValidatableObject
 {
     [Required(ErrorMessage = "Le nom du serveur est obligatoire.")]
     public string Server { get; set; } = @"(localdb)\MSSQLLocalDB";
 
-    [Required(ErrorMessage = "Le nom de la base est obligatoire.")]
     public string Database { get; set; } = string.Empty;
+
+    public bool AnalyzeEntireServer { get; set; } = true;
 
     public bool UseIntegratedSecurity { get; set; } = true;
 
@@ -21,12 +22,13 @@ public sealed class DatabaseConnectionOptions
 
     public bool TrustServerCertificate { get; set; } = true;
 
-    public string BuildConnectionString()
+    public string BuildConnectionString(string? initialCatalog = null)
     {
+        var targetDatabase = initialCatalog ?? (AnalyzeEntireServer ? "master" : Database.Trim());
         var builder = new SqlConnectionStringBuilder
         {
             DataSource = Server.Trim(),
-            InitialCatalog = Database.Trim(),
+            InitialCatalog = targetDatabase,
             IntegratedSecurity = UseIntegratedSecurity,
             Encrypt = Encrypt,
             TrustServerCertificate = TrustServerCertificate,
@@ -45,5 +47,15 @@ public sealed class DatabaseConnectionOptions
         }
 
         return builder.ConnectionString;
+    }
+
+    public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+    {
+        if (!AnalyzeEntireServer && string.IsNullOrWhiteSpace(Database))
+        {
+            yield return new ValidationResult(
+                "Le nom de la base est obligatoire en mode base unique.",
+                [nameof(Database)]);
+        }
     }
 }
