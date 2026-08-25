@@ -1,6 +1,7 @@
 window.dbTreeView = (() => {
     let graph = null;
     let selectedNode = null;
+    let graphResizeObserver = null;
 
     const kindLabels = {
         Database: "Base de données",
@@ -27,6 +28,7 @@ window.dbTreeView = (() => {
         const impacts = new Map((performance?.nodeImpacts || []).map(impact => [impact.nodeId, impact]));
         const nodeElements = map.nodes.map(node => {
             const impact = impacts.get(node.id);
+            const isContainer = node.kind === "Database" || node.kind === "Schema";
             return {
                 data: {
                     id: node.id,
@@ -42,7 +44,12 @@ window.dbTreeView = (() => {
                     impactExecutions: impact?.executionCount || 0,
                     impactElapsed: impact?.averageElapsedMs || 0,
                     impactSummary: impact?.summary || "Aucune mesure disponible pour cet objet."
-                }
+                },
+                // Les nœuds composés occupent presque tout le canevas. Leur fond doit
+                // donc se comporter comme celui du graphe et laisser passer le panoramique.
+                selectable: !isContainer,
+                grabbable: !isContainer,
+                pannable: isContainer
             };
         });
 
@@ -60,8 +67,13 @@ window.dbTreeView = (() => {
         graph = cytoscape({
             container,
             elements: [...nodeElements, ...edgeElements],
-            minZoom: 0.18,
-            maxZoom: 2.4,
+            minZoom: 0.04,
+            maxZoom: 3.5,
+            panningEnabled: true,
+            userPanningEnabled: true,
+            zoomingEnabled: true,
+            userZoomingEnabled: true,
+            wheelSensitivity: 0.22,
             selectionType: "single",
             boxSelectionEnabled: false,
             style: [
@@ -230,12 +242,27 @@ window.dbTreeView = (() => {
             layout: layoutOptions("cose")
         });
 
-        graph.on("tap", "node", event => selectNode(event.target));
+        graph.on("tap", "node", event => {
+            const kind = event.target.data("kind");
+            if (kind === "Database" || kind === "Schema") {
+                resetFocus();
+                return;
+            }
+
+            selectNode(event.target);
+        });
         graph.on("tap", event => {
             if (event.target === graph) {
                 resetFocus();
             }
         });
+
+        if (typeof ResizeObserver !== "undefined") {
+            graphResizeObserver = new ResizeObserver(() => {
+                window.requestAnimationFrame(() => graph?.resize());
+            });
+            graphResizeObserver.observe(container);
+        }
 
         const focusButton = document.getElementById("selection-focus");
         const resetButton = document.getElementById("selection-reset");
@@ -408,7 +435,6 @@ window.dbTreeView = (() => {
         if (graph) {
             window.requestAnimationFrame(() => {
                 graph.resize();
-                graph.fit(undefined, 45);
             });
         }
     }
@@ -443,6 +469,11 @@ window.dbTreeView = (() => {
     }
 
     function destroy() {
+        if (graphResizeObserver) {
+            graphResizeObserver.disconnect();
+            graphResizeObserver = null;
+        }
+
         if (graph) {
             graph.destroy();
             graph = null;
