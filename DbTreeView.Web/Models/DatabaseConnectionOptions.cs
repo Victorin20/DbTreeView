@@ -5,6 +5,8 @@ namespace DbTreeView.Web.Models;
 
 public sealed class DatabaseConnectionOptions : IValidatableObject
 {
+    private static readonly string ClientApplicationName = $"DB Tree View/{Guid.NewGuid():N}";
+
     [Required(ErrorMessage = "Le nom du serveur est obligatoire.")]
     public string Server { get; set; } = @"(localdb)\MSSQLLocalDB";
 
@@ -33,7 +35,7 @@ public sealed class DatabaseConnectionOptions : IValidatableObject
             Encrypt = Encrypt,
             TrustServerCertificate = TrustServerCertificate,
             ApplicationIntent = ApplicationIntent.ReadOnly,
-            ApplicationName = "DB Tree View",
+            ApplicationName = ClientApplicationName,
             ConnectTimeout = 8,
             CommandTimeout = 60,
             PersistSecurityInfo = false,

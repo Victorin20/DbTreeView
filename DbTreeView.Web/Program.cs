@@ -25,6 +25,7 @@ builder.Services
 builder.Services.AddScoped<DatabaseSession>();
 builder.Services.AddScoped<SqlServerMetadataService>();
 builder.Services.AddScoped<SqlServerPerformanceService>();
+builder.Services.AddScoped<SqlServerConnectedApplicationsService>();
 
 var app = builder.Build();
 

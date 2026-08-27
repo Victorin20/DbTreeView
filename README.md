@@ -21,6 +21,8 @@ forme de graphe interactif.
 - Mesures CPU, durée, exécutions, lectures logiques, seeks, scans et écritures.
 - Niveau de chaleur reporté sur les nœuds de la cartographie.
 - Impact des vues estimé à partir des procédures qui les utilisent.
+- Liste instantanée des applications connectées à chaque base, avec machine,
+  compte, pilote, sessions actives ou en veille et transactions ouvertes.
 - Références externes ou non résolues affichées en gris.
 - Mode démonstration ne nécessitant pas SQL Server.
 
@@ -116,6 +118,27 @@ Ces droits exposent des informations de diagnostic sur l'instance. Ils doivent
 être accordés à un compte de supervision dédié et validés par l'administrateur
 SQL Server.
 
+Les mêmes permissions serveur permettent d’afficher l’onglet **Applications**.
+Sans elles, la cartographie fonctionne normalement et cet onglet présente un
+avertissement au lieu de lister partiellement les seules sessions du compte
+courant.
+
+## Comment fonctionne la liste des applications
+
+- La collecte interroge `sys.dm_exec_sessions` une seule fois pour le serveur et
+  conserve uniquement les bases du périmètre analysé.
+- `program_name`, `host_name`, le compte de connexion et l’interface cliente
+  permettent de regrouper les sessions par application et par base courante.
+- Les sessions de l’instance **DB Tree View** en cours sont exclues afin que son
+  propre pooling ne fausse pas les résultats.
+- Il s’agit d’un instantané : une application déconnectée disparaît du prochain
+  relevé. Le bouton **Actualiser** refait la collecte.
+- Les noms d’application et de machine sont déclarés par le client SQL. Ils sont
+  informatifs et ne doivent pas être utilisés comme preuve d’identité ou comme
+  contrôle de sécurité.
+- Pour distinguer clairement les clients, renseignez
+  `Application Name=NomDeLApplication` dans chacune de leurs chaînes de connexion.
+
 ## Comment fonctionnent les statistiques
 
 - Les collecteurs sont exécutés séparément dans chaque base découverte, puis les
@@ -147,6 +170,9 @@ SQL Server.
 - Les compteurs de procédures disparaissent lorsqu'un plan quitte le cache ; les
   compteurs d'utilisation d'index peuvent repartir de zéro après un redémarrage.
 - Query Store n'est jamais activé ou modifié automatiquement par l'application.
+- L’onglet Applications montre la base de contexte de chaque session. Un accès
+  ponctuel à une autre base au moyen d’un nom SQL qualifié n’est pas attribuable
+  avec certitude par ce seul instantané.
 - Cette version affiche les pistes prioritaires, mais pas encore les plans
   d'exécution graphiques ni les attentes SQL Server.
 

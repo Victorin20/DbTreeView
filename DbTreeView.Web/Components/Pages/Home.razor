@@ -4,6 +4,7 @@
 @using Microsoft.Data.SqlClient
 @inject SqlServerMetadataService MetadataService
 @inject SqlServerPerformanceService PerformanceService
+@inject SqlServerConnectedApplicationsService ConnectedApplicationsService
 @inject DatabaseSession Session
 @inject IJSRuntime JS
 
@@ -163,6 +164,13 @@
                     <i>@performance.HotObjectCount</i>
                 }
             </button>
+            <button type="button" class="@(activeView == "connections" ? "active" : null)" @onclick="ShowConnectedApplicationsAsync">
+                <span>Applications</span><small>Clients et sessions SQL</small>
+                @if (connectedApplications is not null && connectedApplications.TotalSessionCount > 0)
+                {
+                    <i class="connection-count">@connectedApplications.TotalSessionCount</i>
+                }
+            </button>
         </nav>
 
         @if (activeView == "map")
@@ -237,9 +245,17 @@
         </section>
 
         }
-        else if (performance is not null)
+        else if (activeView == "performance" && performance is not null)
         {
             <PerformanceDashboard Snapshot="performance" Map="map" />
+        }
+        else if (activeView == "connections" && connectedApplications is not null)
+        {
+            <ConnectedApplicationsDashboard Snapshot="connectedApplications"
+                                            Map="map"
+                                            OnRefresh="RefreshConnectedApplicationsAsync"
+                                            CanRefresh="@(!isDemo)"
+                                            IsRefreshing="isLoading" />
         }
 
         @foreach (var warning in map.Warnings)
@@ -253,6 +269,7 @@
     private readonly DatabaseConnectionOptions options = new();
     private DatabaseMap? map;
     private PerformanceSnapshot? performance;
+    private ConnectedApplicationsSnapshot? connectedApplications;
     private string? errorMessage;
     private string searchTerm = string.Empty;
     private string selectedLayout = "cose";
@@ -299,6 +316,7 @@
 
             map = await MetadataService.ReadMapAsync();
             performance = await LoadPerformanceSafeAsync(map);
+            connectedApplications = await LoadConnectedApplicationsSafeAsync(map);
             selectedDatabase = string.Empty;
             activeView = "map";
             renderGraphPending = true;
@@ -325,6 +343,7 @@
         isDemo = true;
         map = DemoDatabaseMapFactory.Create();
         performance = DemoPerformanceSnapshotFactory.Create();
+        connectedApplications = DemoConnectedApplicationsFactory.Create();
         selectedDatabase = string.Empty;
         activeView = "map";
         renderGraphPending = true;
@@ -344,6 +363,7 @@
         {
             map = await MetadataService.ReadMapAsync();
             performance = await LoadPerformanceSafeAsync(map);
+            connectedApplications = await LoadConnectedApplicationsSafeAsync(map);
             selectedDatabase = string.Empty;
             renderGraphPending = activeView == "map";
         }
@@ -364,6 +384,7 @@
         options.Password = string.Empty;
         map = null;
         performance = null;
+        connectedApplications = null;
         isDemo = false;
         errorMessage = null;
         searchTerm = string.Empty;
@@ -387,6 +408,34 @@
         activeView = "performance";
     }
 
+    private async Task ShowConnectedApplicationsAsync()
+    {
+        await JS.InvokeVoidAsync("dbTreeView.destroy");
+        activeView = "connections";
+
+        await RefreshConnectedApplicationsAsync();
+    }
+
+    private async Task RefreshConnectedApplicationsAsync()
+    {
+        var currentMap = map;
+
+        if (isLoading || isDemo || currentMap is null)
+        {
+            return;
+        }
+
+        isLoading = true;
+        try
+        {
+            connectedApplications = await LoadConnectedApplicationsSafeAsync(currentMap);
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
     private async Task<PerformanceSnapshot> LoadPerformanceSafeAsync(DatabaseMap databaseMap)
     {
         try
@@ -404,6 +453,21 @@
                 [],
                 [],
                 [$"La cartographie est disponible, mais la collecte des performances a échoué : {exception.Message}"]);
+        }
+    }
+
+    private async Task<ConnectedApplicationsSnapshot> LoadConnectedApplicationsSafeAsync(DatabaseMap databaseMap)
+    {
+        try
+        {
+            return await ConnectedApplicationsService.ReadAsync(databaseMap);
+        }
+        catch (Exception exception)
+        {
+            return new ConnectedApplicationsSnapshot(
+                DateTimeOffset.UtcNow,
+                [],
+                [$"La cartographie est disponible, mais la lecture des applications connectées a échoué : {exception.Message}"]);
         }
     }
 

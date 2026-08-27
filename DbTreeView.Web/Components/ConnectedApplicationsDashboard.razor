@@ -1,0 +1,173 @@
+@using System.Globalization
+@using DbTreeView.Web.Models
+
+<section class="connections-dashboard">
+    <div class="performance-summary connection-summary" aria-label="Résumé des applications connectées">
+        <article><p>Applications</p><strong>@Snapshot.ApplicationCount</strong><small>Noms clients distincts</small></article>
+        <article><p>Sessions SQL</p><strong>@FormatInteger(Snapshot.TotalSessionCount)</strong><small>Actives ou au repos</small></article>
+        <article><p>Sessions actives</p><strong>@FormatInteger(Snapshot.ActiveSessionCount)</strong><small>Travail en cours au moment du relevé</small></article>
+        <article><p>Bases concernées</p><strong>@Snapshot.DatabaseCount</strong><small>Avec au moins une connexion détectée</small></article>
+    </div>
+
+    @foreach (var warning in Snapshot.Warnings)
+    {
+        <div class="message message-warning connection-warning"><span>i</span>@warning</div>
+    }
+
+    <div class="method-note connection-method">
+        <span>i</span>
+        <p>
+            <strong>Photographie prise à @Snapshot.CollectedAt.ToLocalTime().ToString("HH:mm:ss").</strong>
+            Les noms d’application et de machine sont déclarés par les clients SQL Server : ils sont utiles au diagnostic,
+            mais ne constituent pas une identité de sécurité. Pour obtenir un nom explicite, chaque client doit renseigner
+            <code>Application Name</code> dans sa chaîne de connexion. Les connexions de cette instance de DB Tree View sont exclues du relevé.
+        </p>
+    </div>
+
+    <section class="performance-section">
+        <div class="section-heading connection-heading">
+            <div>
+                <p class="eyebrow">Sessions clientes</p>
+                <h2>Applications actuellement connectées</h2>
+            </div>
+            <div class="connection-controls">
+                @if (DatabaseOptions.Count > 1)
+                {
+                    <label class="connection-filter">
+                        <span>Base</span>
+                        <select @bind="selectedDatabase" aria-label="Filtrer les applications par base de données">
+                            <option value="">Toutes les bases</option>
+                            @foreach (var database in DatabaseOptions)
+                            {
+                                <option value="@database">@database</option>
+                            }
+                        </select>
+                    </label>
+                }
+                <button type="button"
+                        class="button button-secondary connection-refresh"
+                        @onclick="RefreshAsync"
+                        disabled="@(!CanRefresh || IsRefreshing)">
+                    @(IsRefreshing ? "Actualisation…" : "Actualiser les connexions")
+                </button>
+            </div>
+        </div>
+
+        @if (FilteredApplications.Count == 0)
+        {
+            <div class="performance-empty">
+                @if (Snapshot.Warnings.Count > 0)
+                {
+                    <span>Aucune session ne peut être affichée avec les permissions actuelles.</span>
+                }
+                else
+                {
+                    <span>Aucune autre application n’est actuellement connectée au périmètre analysé.</span>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="table-scroll">
+                <table class="performance-table connections-table">
+                    <thead>
+                        <tr>
+                            <th>Application</th>
+                            <th>Base courante</th>
+                            <th>Machine cliente</th>
+                            <th>Compte</th>
+                            <th>Sessions</th>
+                            <th>Actives</th>
+                            <th>En veille</th>
+                            <th>Transactions ouvertes</th>
+                            <th>Première connexion</th>
+                            <th>Dernière activité</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in FilteredApplications)
+                        {
+                            <tr>
+                                <td>
+                                    <div class="application-identity">
+                                        <span class="application-default-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24" focusable="false">
+                                                <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>
+                                                <path d="M4 9h16M7 6.75h.01M10 6.75h.01"></path>
+                                            </svg>
+                                        </span>
+                                        <span class="application-label">
+                                            <strong>@item.ApplicationName</strong>
+                                            <small>@item.ClientInterface</small>
+                                        </span>
+                                    </div>
+                                </td>
+                                <td><strong>@item.Database</strong><small>Contexte courant</small></td>
+                                <td>@item.HostName</td>
+                                <td>@item.LoginName</td>
+                                <td class="number-cell">@FormatInteger(item.SessionCount)</td>
+                                <td><span class="connection-state @(item.ActiveSessionCount > 0 ? "active" : "idle")">@FormatInteger(item.ActiveSessionCount)</span></td>
+                                <td class="number-cell">@FormatInteger(item.SleepingSessionCount)</td>
+                                <td class="number-cell">@FormatInteger(item.OpenTransactionCount)</td>
+                                <td>@FormatDate(item.FirstConnectedAt)</td>
+                                <td>@FormatDate(item.LastActivityAt)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+</section>
+
+@code {
+    private static readonly CultureInfo FrenchCulture = CultureInfo.GetCultureInfo("fr-FR");
+    private string selectedDatabase = string.Empty;
+
+    [Parameter, EditorRequired]
+    public required ConnectedApplicationsSnapshot Snapshot { get; set; }
+
+    [Parameter, EditorRequired]
+    public required DatabaseMap Map { get; set; }
+
+    [Parameter]
+    public EventCallback OnRefresh { get; set; }
+
+    [Parameter]
+    public bool CanRefresh { get; set; } = true;
+
+    [Parameter]
+    public bool IsRefreshing { get; set; }
+
+    private IReadOnlyList<string> DatabaseOptions =>
+        (Map.ScannedDatabases ?? [Map.Database])
+            .Where(database => !string.IsNullOrWhiteSpace(database))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(database => database, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<ConnectedApplication> FilteredApplications => Snapshot.Applications
+        .Where(item => string.IsNullOrEmpty(selectedDatabase)
+            || string.Equals(item.Database, selectedDatabase, StringComparison.OrdinalIgnoreCase))
+        .OrderByDescending(item => item.SessionCount)
+        .ThenBy(item => item.Database, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(item => item.ApplicationName, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrEmpty(selectedDatabase)
+            && !DatabaseOptions.Contains(selectedDatabase, StringComparer.OrdinalIgnoreCase))
+        {
+            selectedDatabase = string.Empty;
+        }
+    }
+
+    private static string FormatInteger(long value) => value.ToString("N0", FrenchCulture);
+
+    private Task RefreshAsync() => OnRefresh.InvokeAsync();
+
+    private static string FormatDate(DateTime? value) => value is null
+        ? "—"
+        : value.Value.ToString("dd/MM HH:mm:ss", FrenchCulture);
+}
