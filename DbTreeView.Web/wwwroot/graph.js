@@ -2,6 +2,7 @@ window.dbTreeView = (() => {
     let graph = null;
     let selectedNode = null;
     let graphResizeObserver = null;
+    let labelMeasurementContext = null;
 
     const kindLabels = {
         Database: "Base de données",
@@ -33,6 +34,7 @@ window.dbTreeView = (() => {
                 data: {
                     id: node.id,
                     label: node.name,
+                    labelWidth: measureNodeWidth(node.name),
                     qualifiedName: node.qualifiedName,
                     schema: node.schema,
                     database: node.database,
@@ -91,14 +93,17 @@ window.dbTreeView = (() => {
                         "font-family": "Inter, Segoe UI, sans-serif",
                         "font-size": 11,
                         "font-weight": 600,
-                        "text-wrap": "ellipsis",
-                        "text-max-width": 132,
+                        "text-wrap": "none",
                         "text-valign": "center",
                         "text-halign": "center",
                         "overlay-opacity": 0,
                         "transition-property": "opacity, border-color, border-width, background-color",
                         "transition-duration": "180ms"
                     }
+                },
+                {
+                    selector: "node:childless",
+                    style: { "width": "data(labelWidth)" }
                 },
                 {
                     selector: "node[kind = 'Procedure']",
@@ -304,6 +309,21 @@ window.dbTreeView = (() => {
         };
     }
 
+    function measureNodeWidth(label) {
+        if (!labelMeasurementContext) {
+            const canvas = document.createElement("canvas");
+            labelMeasurementContext = canvas.getContext("2d");
+        }
+
+        const text = String(label || "");
+        if (!labelMeasurementContext) {
+            return Math.max(154, Math.ceil(text.length * 7) + 36);
+        }
+
+        labelMeasurementContext.font = '600 11px Inter, "Segoe UI", sans-serif';
+        return Math.max(154, Math.ceil(labelMeasurementContext.measureText(text).width) + 36);
+    }
+
     function selectNode(node) {
         if (!graph || node.data("kind") === "Schema" || node.data("kind") === "Database") return;
 
@@ -410,6 +430,18 @@ window.dbTreeView = (() => {
         if (graph) graph.fit(undefined, 45);
     }
 
+    function zoomIn() {
+        if (!graph) return;
+
+        graph.zoom({
+            level: graph.zoom() * 1.7,
+            renderedPosition: {
+                x: graph.width() / 2,
+                y: graph.height() / 2
+            }
+        });
+    }
+
     async function toggleFullscreen(elementId) {
         const panel = document.getElementById(elementId);
         if (!panel) return;
@@ -481,5 +513,5 @@ window.dbTreeView = (() => {
         selectedNode = null;
     }
 
-    return { render, search, changeLayout, filterDatabase, showForeignKeys, fit, toggleFullscreen, destroy };
+    return { render, search, changeLayout, filterDatabase, showForeignKeys, fit, zoomIn, toggleFullscreen, destroy };
 })();

@@ -193,6 +193,7 @@
                         <option value="breadthfirst">Hiérarchique</option>
                         <option value="circle">Circulaire</option>
                     </select>
+                    <button type="button" @onclick="ZoomInGraphAsync" title="Zoomer rapidement dans la cartographie" aria-label="Zoomer rapidement">＋ Zoom</button>
                     <button type="button" @onclick="FitGraphAsync" title="Centrer le graphe">⊙ Centrer</button>
                     <button type="button" @onclick="ToggleForeignKeysAsync" class="@(showForeignKeys ? "active" : null)">Clés étrangères</button>
                     <button id="graph-fullscreen" type="button" @onclick="ToggleFullscreenAsync" title="Afficher la cartographie en plein écran">⛶ Plein écran</button>
@@ -370,6 +371,8 @@
     }
 
     private Task FitGraphAsync() => JS.InvokeVoidAsync("dbTreeView.fit").AsTask();
+
+    private Task ZoomInGraphAsync() => JS.InvokeVoidAsync("dbTreeView.zoomIn").AsTask();
 
     private Task ShowMapAsync()
     {
