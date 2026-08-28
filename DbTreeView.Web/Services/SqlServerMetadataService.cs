@@ -25,7 +25,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         FROM sys.objects AS o
         INNER JOIN sys.schemas AS s ON s.schema_id = o.schema_id
         WHERE o.is_ms_shipped = 0
-          AND o.type IN ('U', 'V', 'P', 'PC', 'FN', 'IF', 'TF')
+          AND o.type IN ('U', 'V', 'P', 'PC', 'X', 'FN', 'IF', 'TF', 'FS', 'FT', 'AF')
         ORDER BY s.name, o.name;
         """;
 
@@ -36,7 +36,9 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             d.referenced_server_name,
             d.referenced_database_name,
             d.referenced_schema_name,
-            d.referenced_entity_name
+            d.referenced_entity_name,
+            d.is_caller_dependent,
+            d.is_ambiguous
         FROM sys.sql_expression_dependencies AS d
         WHERE d.referencing_id IS NOT NULL
           AND d.referenced_entity_name IS NOT NULL;
@@ -135,6 +137,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         var nodes = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
         var objectsByKey = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
         var objectsByQualifiedName = new Dictionary<string, DatabaseMapNode>(StringComparer.OrdinalIgnoreCase);
+        var callableObjectsByName = new Dictionary<string, List<DatabaseMapNode>>(StringComparer.OrdinalIgnoreCase);
         var dependencies = new List<PendingDependency>();
         var edges = new List<DatabaseMapEdge>();
         var warnings = new List<string>();
@@ -189,6 +192,18 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
                     nodes[pair.Value.Id] = pair.Value;
                     objectsByKey[ObjectKey(database, pair.Key)] = pair.Value;
                     objectsByQualifiedName[QualifiedKey(database, pair.Value.Schema, pair.Value.Name)] = pair.Value;
+
+                    if (IsCallable(pair.Value))
+                    {
+                        var nameKey = ObjectNameKey(database, pair.Value.Name);
+                        if (!callableObjectsByName.TryGetValue(nameKey, out var callableObjects))
+                        {
+                            callableObjects = [];
+                            callableObjectsByName[nameKey] = callableObjects;
+                        }
+
+                        callableObjects.Add(pair.Value);
+                    }
                 }
 
                 try
@@ -222,10 +237,19 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
             dependencies,
             objectsByKey,
             objectsByQualifiedName,
+            callableObjectsByName,
             nodes,
             edges,
             session.IsServerScope,
             session.Server);
+
+        var inferredCallCount = edges.Count(edge => edge.Kind == DatabaseRelationKind.Calls && edge.IsInferred);
+        if (inferredCallCount > 0)
+        {
+            warnings.Add(
+                $"{inferredCallCount} appel(s) sans schéma ont une cible probable affichée en pointillés ; " +
+                "la cible exacte dépend du contexte d’exécution SQL Server.");
+        }
 
         if (emptyDatabaseCount > 0)
         {
@@ -337,7 +361,9 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
                 GetNullableString(reader, 2),
                 GetNullableString(reader, 3),
                 GetNullableString(reader, 4),
-                GetNullableString(reader, 5)));
+                GetNullableString(reader, 5),
+                !reader.IsDBNull(6) && reader.GetBoolean(6),
+                !reader.IsDBNull(7) && reader.GetBoolean(7)));
         }
     }
 
@@ -345,6 +371,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         IEnumerable<PendingDependency> dependencies,
         IReadOnlyDictionary<string, DatabaseMapNode> objectsByKey,
         IReadOnlyDictionary<string, DatabaseMapNode> objectsByQualifiedName,
+        IReadOnlyDictionary<string, List<DatabaseMapNode>> callableObjectsByName,
         IDictionary<string, DatabaseMapNode> nodes,
         ICollection<DatabaseMapEdge> edges,
         bool serverScope,
@@ -354,6 +381,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         foreach (var dependency in dependencies)
         {
             DatabaseMapNode? target = null;
+            var targetIsInferred = false;
             var referencesCurrentServer = IsCurrentServer(dependency.ReferencedServer, currentServer);
             if (dependency.ReferencedId is not null && referencesCurrentServer)
             {
@@ -369,6 +397,20 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
                 objectsByQualifiedName.TryGetValue(
                     QualifiedKey(targetDatabase, dependency.ReferencedSchema, dependency.ReferencedEntity),
                     out target);
+            }
+
+            if (target is null &&
+                referencesCurrentServer &&
+                dependency.IsCallerDependent &&
+                string.IsNullOrWhiteSpace(dependency.ReferencedSchema) &&
+                !string.IsNullOrWhiteSpace(dependency.ReferencedEntity) &&
+                callableObjectsByName.TryGetValue(
+                    ObjectNameKey(targetDatabase, dependency.ReferencedEntity),
+                    out var callableCandidates) &&
+                callableCandidates.Count == 1)
+            {
+                target = callableCandidates[0];
+                targetIsInferred = true;
             }
 
             if (target is null && !string.IsNullOrWhiteSpace(dependency.ReferencedEntity))
@@ -394,19 +436,29 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
                 nodes.TryAdd(externalId, target);
             }
 
-            if (target is null || dependency.Source.Id == target.Id)
+            if (target is null)
             {
                 continue;
             }
+
+            var relationKind = IsCallable(target) || dependency.IsCallerDependent || dependency.IsAmbiguous
+                ? DatabaseRelationKind.Calls
+                : DatabaseRelationKind.DependsOn;
+            var sameDatabase = target.Database.Equals(
+                dependency.SourceDatabase,
+                StringComparison.OrdinalIgnoreCase);
 
             edges.Add(new DatabaseMapEdge(
                 $"dependency:{++edgeNumber}",
                 dependency.Source.Id,
                 target.Id,
-                DatabaseRelationKind.DependsOn,
-                target.Database.Equals(dependency.SourceDatabase, StringComparison.OrdinalIgnoreCase)
-                    ? "utilise"
-                    : "utilise une autre base"));
+                relationKind,
+                relationKind == DatabaseRelationKind.Calls
+                    ? targetIsInferred
+                        ? sameDatabase ? "appelle (cible probable)" : "appelle probablement dans une autre base"
+                        : sameDatabase ? "appelle" : "appelle dans une autre base"
+                    : sameDatabase ? "utilise" : "utilise une autre base",
+                targetIsInferred));
         }
     }
 
@@ -448,8 +500,8 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
     {
         "U" => DatabaseObjectKind.Table,
         "V" => DatabaseObjectKind.View,
-        "P" or "PC" => DatabaseObjectKind.Procedure,
-        "FN" or "IF" or "TF" => DatabaseObjectKind.Function,
+        "P" or "PC" or "X" => DatabaseObjectKind.Procedure,
+        "FN" or "IF" or "TF" or "FS" or "FT" or "AF" => DatabaseObjectKind.Function,
         _ => DatabaseObjectKind.External
     };
 
@@ -458,12 +510,16 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
     private static string ObjectId(string database, int objectId) => $"object:{database}:{objectId}".ToLowerInvariant();
     private static string ObjectKey(string database, int objectId) => $"{database}:{objectId}";
     private static string QualifiedKey(string database, string schema, string entity) => $"{database}:{schema}:{entity}";
+    private static string ObjectNameKey(string database, string entity) => $"{database}:{entity}";
     private static string ExternalId(string sourceDatabase, string qualifiedName) =>
         $"external:{sourceDatabase}:{qualifiedName}".ToLowerInvariant();
 
     private static bool IsCurrentServer(string? referencedServer, string currentServer) =>
         string.IsNullOrWhiteSpace(referencedServer) ||
         referencedServer.Equals(currentServer, StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsCallable(DatabaseMapNode node) =>
+        node.Kind is DatabaseObjectKind.Procedure or DatabaseObjectKind.Function;
 
     private static string ToFriendlyConnectionMessage(SqlException exception) => exception.Number switch
     {
@@ -482,5 +538,7 @@ public sealed class SqlServerMetadataService(DatabaseSession session, ILogger<Sq
         string? ReferencedServer,
         string? ReferencedDatabase,
         string? ReferencedSchema,
-        string? ReferencedEntity);
+        string? ReferencedEntity,
+        bool IsCallerDependent,
+        bool IsAmbiguous);
 }

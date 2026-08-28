@@ -19,6 +19,7 @@ public static class DemoDatabaseMapFactory
             new(referenceSchemaId, "dbo", "ReferentielDemo.dbo", "dbo", DatabaseObjectKind.Schema, referenceDatabaseId, Database: "ReferentielDemo"),
             new("object:ventesdemo:1", "usp_GenererFacture", "VentesDemo.dbo.usp_GenererFacture", "dbo", DatabaseObjectKind.Procedure, salesSchemaId, Database: "VentesDemo", SqlObjectId: 1),
             new("object:ventesdemo:2", "usp_ChargerClient", "VentesDemo.dbo.usp_ChargerClient", "dbo", DatabaseObjectKind.Procedure, salesSchemaId, Database: "VentesDemo", SqlObjectId: 2),
+            new("object:ventesdemo:7", "fn_CalculerTotal", "VentesDemo.dbo.fn_CalculerTotal", "dbo", DatabaseObjectKind.Function, salesSchemaId, Database: "VentesDemo", SqlObjectId: 7),
             new("object:ventesdemo:3", "vw_CommandesEnCours", "VentesDemo.dbo.vw_CommandesEnCours", "dbo", DatabaseObjectKind.View, salesSchemaId, Database: "VentesDemo", SqlObjectId: 3),
             new("object:referentieldemo:4", "Clients", "ReferentielDemo.dbo.Clients", "dbo", DatabaseObjectKind.Table, referenceSchemaId, Database: "ReferentielDemo", SqlObjectId: 4),
             new("object:ventesdemo:5", "Commandes", "VentesDemo.dbo.Commandes", "dbo", DatabaseObjectKind.Table, salesSchemaId, Database: "VentesDemo", SqlObjectId: 5),
@@ -27,11 +28,13 @@ public static class DemoDatabaseMapFactory
 
         var edges = new List<DatabaseMapEdge>
         {
-            new("dependency:1", "object:ventesdemo:1", "object:ventesdemo:2", DatabaseRelationKind.DependsOn, "appelle"),
+            new("dependency:1", "object:ventesdemo:1", "object:ventesdemo:2", DatabaseRelationKind.Calls, "appelle"),
             new("dependency:2", "object:ventesdemo:1", "object:ventesdemo:3", DatabaseRelationKind.DependsOn, "utilise"),
             new("dependency:3", "object:ventesdemo:1", "object:ventesdemo:6", DatabaseRelationKind.DependsOn, "écrit"),
             new("dependency:4", "object:ventesdemo:2", "object:referentieldemo:4", DatabaseRelationKind.DependsOn, "utilise une autre base"),
             new("dependency:5", "object:ventesdemo:3", "object:ventesdemo:5", DatabaseRelationKind.DependsOn, "utilise"),
+            new("dependency:6", "object:ventesdemo:1", "object:ventesdemo:7", DatabaseRelationKind.Calls, "appelle"),
+            new("dependency:7", "object:ventesdemo:7", "object:ventesdemo:5", DatabaseRelationKind.DependsOn, "utilise"),
             new("foreign-key:ventesdemo:1", "object:ventesdemo:6", "object:ventesdemo:5", DatabaseRelationKind.ForeignKey, "FK_Factures_Commandes")
         };
 

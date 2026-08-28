@@ -338,7 +338,7 @@ public sealed partial class SqlServerPerformanceService(
     {
         var aggregates = new Dictionary<string, ImpactAggregate>(StringComparer.Ordinal);
         var outgoing = map.Edges
-            .Where(edge => edge.Kind == DatabaseRelationKind.DependsOn)
+            .Where(edge => edge.Kind is DatabaseRelationKind.DependsOn or DatabaseRelationKind.Calls)
             .ToLookup(edge => edge.SourceId, edge => edge.TargetId, StringComparer.Ordinal);
 
         foreach (var procedure in procedures)

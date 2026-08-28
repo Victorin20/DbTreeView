@@ -60,8 +60,9 @@ window.dbTreeView = (() => {
                 id: edge.id,
                 source: edge.sourceId,
                 target: edge.targetId,
-                kind: edge.kind,
-                label: edge.label
+                    kind: edge.kind,
+                    label: edge.label,
+                    inferred: edge.isInferred || false
             },
             classes: edge.kind === "ForeignKey" && !options.showForeignKeys ? "foreign-key-hidden" : ""
         }));
@@ -214,6 +215,21 @@ window.dbTreeView = (() => {
                     }
                 },
                 {
+                    selector: "edge[kind = 'Calls']",
+                    style: {
+                        "width": 1.9,
+                        "line-color": "#d9964e",
+                        "target-arrow-color": "#f5ad55",
+                        "opacity": 0.9
+                    }
+                },
+                {
+                    selector: "edge[inferred = true]",
+                    style: {
+                        "line-style": "dashed"
+                    }
+                },
+                {
                     selector: "edge[kind = 'ForeignKey']",
                     style: {
                         "line-color": "#5e6c80",
@@ -234,7 +250,30 @@ window.dbTreeView = (() => {
                         "z-index": 9999
                     }
                 },
-                { selector: "edge.contextual", style: { "opacity": 1, "width": 2.6, "line-color": "#9eb1cb" } },
+                {
+                    selector: "edge.contextual",
+                    style: {
+                        "opacity": 1,
+                        "width": 2.6,
+                        "line-color": "#9eb1cb",
+                        "label": "data(label)",
+                        "font-family": "Inter, Segoe UI, sans-serif",
+                        "font-size": 8,
+                        "color": "#c1cad6",
+                        "text-background-color": "#0d121a",
+                        "text-background-opacity": 0.9,
+                        "text-background-padding": 2,
+                        "text-rotation": "autorotate",
+                        "text-margin-y": -6
+                    }
+                },
+                {
+                    selector: "edge[kind = 'Calls'].contextual",
+                    style: {
+                        "line-color": "#e0a158",
+                        "target-arrow-color": "#ffc178"
+                    }
+                },
                 {
                     selector: "node:selected",
                     style: {
@@ -330,12 +369,16 @@ window.dbTreeView = (() => {
         selectedNode = node;
         const incoming = node.incomers("edge[kind = 'DependsOn']").length;
         const outgoing = node.outgoers("edge[kind = 'DependsOn']").length;
+        const incomingCalls = node.incomers("edge[kind = 'Calls']").length;
+        const outgoingCalls = node.outgoers("edge[kind = 'Calls']").length;
 
         setText("selection-name", node.data("label"));
         setText("selection-qualified", node.data("qualifiedName"));
         setText("selection-kind", kindLabels[node.data("kind")] || node.data("kind"));
         setText("selection-incoming", incoming.toString());
         setText("selection-outgoing", outgoing.toString());
+        setText("selection-calls-incoming", incomingCalls.toString());
+        setText("selection-calls-outgoing", outgoingCalls.toString());
         setText("selection-heat", heatLabel(node.data("heat")));
         setText("selection-elapsed", formatDuration(node.data("impactElapsed")));
         setText("selection-executions", formatNumber(node.data("impactExecutions")));
@@ -370,6 +413,8 @@ window.dbTreeView = (() => {
         setText("selection-kind", "—");
         setText("selection-incoming", "—");
         setText("selection-outgoing", "—");
+        setText("selection-calls-incoming", "—");
+        setText("selection-calls-outgoing", "—");
         const focusButton = document.getElementById("selection-focus");
         if (focusButton) focusButton.disabled = true;
     }

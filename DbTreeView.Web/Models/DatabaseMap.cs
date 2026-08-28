@@ -18,6 +18,7 @@ public enum DatabaseObjectKind
 public enum DatabaseRelationKind
 {
     DependsOn,
+    Calls,
     ForeignKey
 }
 
@@ -37,7 +38,8 @@ public sealed record DatabaseMapEdge(
     string SourceId,
     string TargetId,
     DatabaseRelationKind Kind,
-    string Label);
+    string Label,
+    bool IsInferred = false);
 
 public sealed record DatabaseMap(
     string Server,

@@ -13,6 +13,9 @@ forme de graphe interactif.
 - Hiérarchie serveur → base → schéma → objet et filtre par base dans le graphe.
 - Lecture en mémoire des objets utilisateur de chaque base.
 - Dépendances issues de `sys.sql_expression_dependencies`.
+- Appels statiques entre procédures et fonctions, avec résolution des `EXEC`
+  sans schéma lorsque la cible est unique dans la base. Ces rattachements
+  dépendants du contexte sont signalés en pointillés comme cibles probables.
 - Résolution des dépendances entre deux bases analysées du même serveur.
 - Relations de clés étrangères issues de `sys.foreign_keys`.
 - Graphe Cytoscape.js avec zoom, recherche et plusieurs dispositions.
@@ -160,7 +163,8 @@ courant.
 
 - Les bases système (`master`, `model`, `msdb` et `tempdb`) sont exclues du mode
   serveur ; elles restent analysables avec le mode base unique.
-- Les appels construits avec du SQL dynamique ne sont pas toujours détectables.
+- Les appels construits avec du SQL dynamique (`EXEC(@sql)` ou texte assemblé
+  pour `sp_executesql`) ne sont pas détectables de manière fiable.
 - Une référence inter-base est résolue lorsque la base cible fait partie du
   périmètre et que le schéma et l'objet sont identifiables. Une référence vers un
   autre serveur reste affichée comme objet externe.
